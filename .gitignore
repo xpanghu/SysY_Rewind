@@ -1,4 +1,4 @@
 debug/
 tmp/
-hello.c
-hello.koopa
+build/
+*.koopa
