@@ -6,7 +6,7 @@ namespace koopa_ir {
 namespace {
 
     template <typename T>
-    const T& ExpectNode(const BaseAST& node, const char* expected_name)
+    const T& expect_node(const BaseAST& node, const char* expected_name)
     {
         const auto* p = dynamic_cast<const T*>(&node);
         if (p == nullptr) {
@@ -17,34 +17,34 @@ namespace {
 
 } // namespace
 
-IRProgram KoopaIRBuilder::Build(const BaseAST& ast) const
+IRProgram KoopaIRBuilder::build(const BaseAST& ast) const
 {
-    const auto& comp_unit = ExpectNode<CompUnitAST>(ast, "CompUnitAST");
-    return LowerCompUnit(comp_unit);
+    const auto& comp_unit = expect_node<CompUnitAST>(ast, "CompUnitAST");
+    return lower_comp_unit(comp_unit);
 }
 
-IRProgram KoopaIRBuilder::LowerCompUnit(const CompUnitAST& ast) const
+IRProgram KoopaIRBuilder::lower_comp_unit(const CompUnitAST& ast) const
 {
     IRProgram program;
-    const auto& func_def = ExpectNode<FuncDefAST>(*ast.func_def, "FuncDefAST");
-    program.functions.push_back(LowerFuncDef(func_def));
+    const auto& func_def = expect_node<FuncDefAST>(*ast.func_def, "FuncDefAST");
+    program.functions.push_back(lower_func_def(func_def));
     return program;
 }
 
-IRFunction KoopaIRBuilder::LowerFuncDef(const FuncDefAST& ast) const
+IRFunction KoopaIRBuilder::lower_func_def(const FuncDefAST& ast) const
 {
     IRFunction function;
     function.name = ast.ident;
 
-    const auto& func_type = ExpectNode<FuncTypeAST>(*ast.func_type, "FuncTypeAST");
-    function.ret_type = LowerFuncType(func_type);
+    const auto& func_type = expect_node<FuncTypeAST>(*ast.func_type, "FuncTypeAST");
+    function.ret_type = lower_func_type(func_type);
 
-    const auto& block = ExpectNode<BlockAST>(*ast.block, "BlockAST");
-    function.blocks.push_back(LowerBlock(block));
+    const auto& block = expect_node<BlockAST>(*ast.block, "BlockAST");
+    function.blocks.push_back(lower_block(block));
     return function;
 }
 
-std::string KoopaIRBuilder::LowerFuncType(const FuncTypeAST& ast) const
+std::string KoopaIRBuilder::lower_func_type(const FuncTypeAST& ast) const
 {
     if (ast.type == "int") {
         return "i32";
@@ -52,17 +52,17 @@ std::string KoopaIRBuilder::LowerFuncType(const FuncTypeAST& ast) const
     throw std::runtime_error("Unsupported SysY function type: " + ast.type);
 }
 
-IRBasicBlock KoopaIRBuilder::LowerBlock(const BlockAST& ast) const
+IRBasicBlock KoopaIRBuilder::lower_block(const BlockAST& ast) const
 {
     IRBasicBlock block;
     block.name = "%entry";
 
-    const auto& stmt = ExpectNode<StmtAST>(*ast.stmt, "StmtAST");
-    block.insts.push_back(LowerStmt(stmt));
+    const auto& stmt = expect_node<StmtAST>(*ast.stmt, "StmtAST");
+    block.insts.push_back(lower_stmt(stmt));
     return block;
 }
 
-IRInstruction KoopaIRBuilder::LowerStmt(const StmtAST& ast) const
+IRInstruction KoopaIRBuilder::lower_stmt(const StmtAST& ast) const
 {
     IRInstruction inst;
     inst.kind = IRInstruction::Kind::kRet;

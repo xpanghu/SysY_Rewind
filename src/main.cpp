@@ -1,12 +1,11 @@
+#include "../tmp/koopa.h"
 #include "ast.h"
-#include "koopa.h"
+// #include "koopa.h"
+#include "koopa_ir.h"
 #include "koopa_ir_builder.h"
-#include "koopa_lib_bridge.h"
-#include "koopa_raw_builder.h"
 #include <cassert>
 #include <cstdio>
 #include <fstream>
-#include <iostream>
 #include <memory>
 #include <string>
 
@@ -41,10 +40,10 @@ int main(int argc, const char* argv[])
 
     // 将解析得到的 AST 先转换为自定义的 koopaIR 结构，再转换为raw_program, 再转换为koopa IR程序
     koopa_ir::KoopaIRBuilder ir_builder;
-    auto ir_program = ir_builder.Build(*ast);
+    auto ir_program = ir_builder.build(*ast);
 
     koopa_ir::KoopaRawBuilder raw_builder;
-    const auto raw_program = raw_builder.Build(ir_program);
+    const auto raw_program = raw_builder.build(ir_program);
 
     koopa_program_t koopa_program = nullptr;
     const auto ec = koopa_generate_raw_to_koopa(&raw_program, &koopa_program);
@@ -52,10 +51,13 @@ int main(int argc, const char* argv[])
         throw std::runtime_error("koopa_generate_raw_to_koopa failed");
     }
 
-    std::string koopaIR_str = koopa_ir::DumpKoopaProgramToString(koopa_program);
-    std::ofstream out(output);
-    out << koopaIR_str;
-    out.close();
+    std::string koopaIR_str = koopa_ir::dump_koopa_program_to_string(koopa_program);
+
+    if (std::string(mode) == "-koopa") {
+        std::ofstream out(output);
+        out << koopaIR_str;
+    }
+
     koopa_delete_program(koopa_program);
     return 0;
 }
