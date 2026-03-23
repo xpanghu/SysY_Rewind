@@ -1,33 +1,21 @@
 %code requires {
-//    #include <memory>
-//    #include <string>
 #include "ast.h"
-
 }
 
 %{
 
-//#include <iostream>
 #include "ast.h"
-// #include <memory>
-// #include <string>
 
 // 声明 lexer函数和函数处理函数
 int yylex();
 void yyerror(std::unique_ptr<BaseAST> &ast, const char *s);
+extern int yylineno;
 
 using namespace std;
 %}
 
-// 定义 parser 函数和错误处理函数的附加参数
-// Bison 生成的 parser 函数返回类型一定是 int , 所以只能通过参数来返回AST
-// 我们需要返回一个字符串作为 AST, 所以我们把附加参数定义成字符串的智能指针
-// 解析完成后, 我们要手动修改这个参数, 把它设置成解析得到的字符串
 %parse-param { std::unique_ptr<BaseAST> &ast}
 
-// yylval 的定义, 我们把它定义成了一个联合体 (union)
-// 因为 token 的值有的是字符串指针, 有的是整数
-// 之前我们在 lexer 中用到的 str_val 和 int_val 就是在这里被定义的
 %union {
     std::string *str_val;
     int int_val;
@@ -36,14 +24,15 @@ using namespace std;
 
 // lexer 返回的所有 token 种类的声明
 // 注意 IDENT 和 INT_CONST 会返回 token 的值, 分别对应 str_val 和 int_val
-%token INT RETURN
+%token INT RETURN 
 %token <str_val> IDENT
+%token ADD SUB BANG
 %token <int_val> INT_CONST
 
 // 非终结符的类型定义
-%type <ast_val> FuncDef FuncType Block Stmt
+%type <ast_val> FuncDef FuncType Block Stmt Exp PrimaryExp UnaryExp
 %type <int_val> Number
-
+%type <str_val> UnaryOp
 %%
 
 // 开始符, CompUnit ::= FuncDef, 大括号后声明了解析完成, parser 要做的事情
@@ -97,11 +86,65 @@ Block
     ;
 
 Stmt
-    : RETURN Number ';' {
+    : RETURN Exp ';' {
         auto ast = new StmtAST();
-        ast->number = $2;
+        ast->kind = StmtKind::RETURN;
+        ast->return_exp = unique_ptr<BaseAST>($2);
         $$ = ast;
     }
+    ;
+
+Exp
+    : UnaryExp {
+       auto ast = new ExpAST();
+       ast->unary_exp = unique_ptr<BaseAST>($1);
+       $$ = ast; 
+    }
+    ;
+    
+PrimaryExp
+    : '(' Exp ')' {
+        auto ast = new PrimaryExpAST();
+        ast->epk = PrimaryExpKind::EXP;
+        ast->exp = unique_ptr<BaseAST>($2);
+        $$ = ast;
+    }
+    | Number {
+        auto ast = new PrimaryExpAST();
+        ast->epk = PrimaryExpKind::NUM;
+        ast->number = $1;
+        $$ = ast;  
+    }
+    ;
+
+// unary operation 一元表达式
+UnaryExp
+    : PrimaryExp {
+        auto ast = new UnaryExpAST();
+        ast->epk = UnaryExpKind::PRIMARY;
+        ast->exp = unique_ptr<BaseAST>($1);
+        $$ = ast;
+    }
+    | UnaryOp UnaryExp {
+        auto ast = new UnaryExpAST();
+        ast->epk = UnaryExpKind::OP;
+        ast->op  = *unique_ptr<string>($1); 
+        ast->exp = unique_ptr<BaseAST>($2);
+        $$ = ast;
+    }
+    ;
+
+UnaryOp
+    : ADD {
+        $$ = new string("+");
+    }
+    | SUB {
+        $$ = new string("-");
+    }
+    | BANG {
+        $$ = new string("!");
+    } 
+    ;
 
 Number
     : INT_CONST {
@@ -114,9 +157,5 @@ Number
 // 定义错误处理函数, 其中第二个参数是错误信息
 // parser 如果发生错误 (例如输入的程序出现了语法错误), 就会调用这个函数
 void yyerror(unique_ptr<BaseAST> &ast, const char *s) {
-  cerr << "error: " << s << endl;
+    cerr << "error at line " << yylineno << ": " << s << endl;
 }
-
-// 生成的头文件会包括什么内容呢? 主要是 parser 函数的定义, 和 yylval 的定义. 
-// 前者是给用户用的, 比如我们想在编译器里调用 Bison 生成的 parser 帮我们解析 SysY 文件, 就需要引用这个头文件. 
-// 后者前文已经介绍过, 用来在 lexer 和 parser 之间传递信息, 我们已经在 Flex 文件中引用了这个头文件.

@@ -2,23 +2,49 @@
 
 #include "../tmp/koopa.h"
 
+#include <assert.h>
 #include <deque>
+#include <stdexcept>
 #include <string>
 #include <vector>
 
 namespace koopa_ir {
+struct IRValue {
+    enum class Kind {
+        IMMEDIATE,
+        VIRTUAL_REGISTER
+    };
+
+    Kind kind;
+    int imm;
+    // Assigned by KoopaIRBuilder from a single global counter starting at 0.
+    int virtual_register_name;
+};
 
 struct IRInstruction {
     enum class Kind {
         kRet,
+        kUnary
+    };
+
+    enum class Op {
+        ADD,
+        SUB,
+        EQ
     };
 
     Kind kind;
-    int ret_value = 0;
+    Op op;
+
+    //
+    IRValue dst;
+    IRValue lhs;
+    IRValue rhs;
 };
 
 struct IRBasicBlock {
     std::string name;
+    // 最后一条指令为终结指令
     std::vector<IRInstruction> insts;
 };
 
@@ -47,9 +73,17 @@ private:
     koopa_raw_function_t lower_function(const IRFunction& function);
     koopa_raw_basic_block_t lower_basic_block(const IRBasicBlock& block);
     koopa_raw_value_t lower_instruction(const IRInstruction& inst);
+    koopa_raw_value_t lower_ir_value(const IRValue& value);
+    koopa_raw_binary_op_t lower_binary_op(IRInstruction::Op op);
+    void bind_virtual_register(const IRValue& value, koopa_raw_value_t raw_value);
 
     koopa_raw_value_t new_integer(int value);
+    koopa_raw_value_t new_binary(koopa_raw_binary_op_t op,
+        koopa_raw_value_t lhs, koopa_raw_value_t rhs,
+        const std::string& name);
     koopa_raw_value_t new_return(koopa_raw_value_t value);
+    std::string to_raw_specific_name(const std::string& name);
+    std::string to_raw_temp_name(const std::string& name);
 
     const char* save_name(const std::string& name);
     static koopa_raw_slice_t make_slice(std::vector<const void*>& items,
@@ -58,8 +92,8 @@ private:
 
     koopa_raw_type_kind_t int32_type_ {};
     koopa_raw_type_kind_t unit_type_ {};
-    koopa_raw_type_kind_t array_type_ {};
-    koopa_raw_type_kind_t pointer_type_ {};
+    // koopa_raw_type_kind_t array_type_ {};
+    // koopa_raw_type_kind_t pointer_type_ {};
 
     koopa_raw_program_t program_ {};
 
@@ -75,6 +109,7 @@ private:
     std::vector<const void*> functions_;
     std::vector<const void*> current_blocks_;
     std::vector<const void*> current_insts_;
+    std::vector<koopa_raw_value_t> current_virtual_values_;
 };
 
 std::string dump_koopa_program_to_string(koopa_program_t program);

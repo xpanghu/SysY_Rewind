@@ -1,5 +1,6 @@
 #include "../tmp/koopa.h"
 #include "ast.h"
+#include "riscv.h"
 // #include "koopa.h"
 #include "koopa_ir.h"
 #include "koopa_ir_builder.h"
@@ -33,31 +34,37 @@ int main(int argc, const char* argv[])
     // 调用 parser 函数, parser 函数会进一步调用 lexer 解析输入文件
     unique_ptr<BaseAST> ast;
     auto ret = yyparse(ast);
-    assert(!ret);
+    if (ret != 0 || !ast) {
+        fclose(yyin);
+        throw runtime_error("yyparse failed: invalid SysY input or grammar action error");
+    }
 
     // 输出解析得到的 AST
     ast->Dump();
 
+    // return 0;
     // 将解析得到的 AST 先转换为自定义的 koopaIR 结构，再转换为raw_program, 再转换为koopa IR程序
     koopa_ir::KoopaIRBuilder ir_builder;
     auto ir_program = ir_builder.build(*ast);
 
     koopa_ir::KoopaRawBuilder raw_builder;
     const auto raw_program = raw_builder.build(ir_program);
-
-    koopa_program_t koopa_program = nullptr;
-    const auto ec = koopa_generate_raw_to_koopa(&raw_program, &koopa_program);
-    if (ec != KOOPA_EC_SUCCESS) {
-        throw std::runtime_error("koopa_generate_raw_to_koopa failed");
-    }
-
-    std::string koopaIR_str = koopa_ir::dump_koopa_program_to_string(koopa_program);
+    ofstream out(output);
 
     if (std::string(mode) == "-koopa") {
-        std::ofstream out(output);
-        out << koopaIR_str;
+        // 由 koopa_raw_program_t 转换为 koopa_program
+        koopa_program_t koopa_program = nullptr;
+        const auto ec = koopa_generate_raw_to_koopa(&raw_program, &koopa_program);
+        if (ec != KOOPA_EC_SUCCESS) {
+            throw std::runtime_error("koopa_generate_raw_to_koopa failed");
+        }
+
+        // 由 koopa_program 转换为 koopaIR 字符串形式, 并输入到 output 文件中
+        out << koopa_ir::dump_koopa_program_to_string(koopa_program);
+        koopa_delete_program(koopa_program);
+    } else if (std::string(mode) == "-riscv") {
+        riscv::emit_program(raw_program, out);
     }
 
-    koopa_delete_program(koopa_program);
     return 0;
 }
