@@ -55,9 +55,7 @@ int main(int argc, const char* argv[])
         // 由 koopa_raw_program_t 转换为 koopa_program
         koopa_program_t koopa_program = nullptr;
         const auto ec = koopa_generate_raw_to_koopa(&raw_program, &koopa_program);
-        if (ec != KOOPA_EC_SUCCESS) {
-            throw std::runtime_error("koopa_generate_raw_to_koopa failed");
-        }
+        assert(ec == KOOPA_EC_SUCCESS);
 
         // 由 koopa_program 转换为 koopaIR 字符串形式, 并输入到 output 文件中
         out << koopa_ir::dump_koopa_program_to_string(koopa_program);

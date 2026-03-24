@@ -9,6 +9,8 @@
 #include <vector>
 
 namespace koopa_ir {
+
+// IR instruction中操作数，返回值的类型
 struct IRValue {
     enum class Kind {
         IMMEDIATE,
@@ -36,9 +38,11 @@ struct IRInstruction {
     Kind kind;
     Op op;
 
-    //
+    // inst  返回值
     IRValue dst;
+    // inst 左操作数
     IRValue lhs;
+    // inst 右操作数
     IRValue rhs;
 };
 
@@ -97,6 +101,7 @@ private:
 
     koopa_raw_program_t program_ {};
 
+    // koopa_raw_program_t 中数据都是指针类型，通过容器将这些数据存储起来
     std::deque<std::string> names_;
 
     std::deque<koopa_raw_type_kind_t> function_type_kinds_;
@@ -105,6 +110,7 @@ private:
     std::deque<koopa_raw_basic_block_data_t> bb_datas_;
     std::deque<koopa_raw_function_data_t> func_datas_;
 
+    // 临时存储的 functions, blocks, insts等, 用于保存遍历过程中的数据
     std::vector<const void*> global_values_;
     std::vector<const void*> functions_;
     std::vector<const void*> current_blocks_;
