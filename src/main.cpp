@@ -1,9 +1,8 @@
-#include "../tmp/koopa.h"
 #include "ast.h"
-#include "riscv.h"
-// #include "koopa.h"
+#include "koopa.h"
 #include "koopa_ir.h"
 #include "koopa_ir_builder.h"
+#include "riscv.h"
 #include <cassert>
 #include <cstdio>
 #include <fstream>
@@ -40,9 +39,11 @@ int main(int argc, const char* argv[])
     }
 
     // 输出解析得到的 AST
-    ast->Dump();
+    if (std::string(mode) == "-ast") {
+        ast->Dump();
+        return 0;
+    }
 
-    // return 0;
     // 将解析得到的 AST 先转换为自定义的 koopaIR 结构，再转换为raw_program, 再转换为koopa IR程序
     koopa_ir::KoopaIRBuilder ir_builder;
     auto ir_program = ir_builder.build(*ast);

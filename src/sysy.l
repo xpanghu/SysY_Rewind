@@ -38,6 +38,17 @@ Hexadecimal   0[xX][0-9a-fA-F]+
 "+"             { return ADD; }
 "-"             { return SUB; }
 "!"             { return BANG; }
+"*"             { return MUL; }
+"/"             { return DIV; }
+"%"             { return MOD; }
+"<"             { return LT; }
+">"             { return GT; }
+"<="            { return LE; }
+">="            { return GE; }
+"=="            { return EQ; }
+"!="            { return NEQ; }
+"&&"            { return AND; }
+"||"            { return OR; }
 
 {Identifier}    { yylval.str_val = new string(yytext); return IDENT; }
 

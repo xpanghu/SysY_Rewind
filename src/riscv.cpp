@@ -1,7 +1,9 @@
 #include "riscv.h"
 
+#include <array>
 #include <deque>
-#include <stdexcept>
+#include <iostream>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <unordered_map>
@@ -20,7 +22,7 @@ namespace {
         void emit_program(const koopa_raw_program_t& program)
         {
             out_ << "  .text\n";
-            // 输出program中全部function name
+            // 输出 program 中 func, 之后开始遍历 func
             for (size_t i = 0; i < program.funcs.len; ++i) {
                 auto func = reinterpret_cast<koopa_raw_function_t>(program.funcs.buffer[i]);
                 out_ << "  .globl " << skip_first(func->name) << "\n";
@@ -30,7 +32,7 @@ namespace {
 
     private:
         enum class Register {
-            x0,
+            x0, // 恒为0
             t0,
             t1,
             t2,
@@ -39,49 +41,67 @@ namespace {
             t5,
             t6,
             a0,
+            a1, // 函数参数/返回值
+            a2,
+            a3,
+            a4,
+            a5,
+            a6,
+            a7,
+            kCount
         };
 
-        static std::string_view skip_first(std::string_view sv)
-        {
-            return sv.empty() ? sv : sv.substr(1);
-        }
+        // c++17 static constexpr可以在类中初始化
+        static constexpr std::array<const char*, static_cast<size_t>(Register::kCount)> kRegisterNames_ {
+            "x0",
+            "t0",
+            "t1",
+            "t2",
+            "t3",
+            "t4",
+            "t5",
+            "t6",
+            "a0",
+            "a1",
+            "a2",
+            "a3",
+            "a4",
+            "a5",
+            "a6",
+            "a7",
+        };
 
-        static const char* reg_name(Register reg)
+        static constexpr const char* reg_name(Register reg)
         {
-            switch (reg) {
-            case Register::x0:
-                return "x0";
-            case Register::t0:
-                return "t0";
-            case Register::t1:
-                return "t1";
-            case Register::t2:
-                return "t2";
-            case Register::t3:
-                return "t3";
-            case Register::t4:
-                return "t4";
-            case Register::t5:
-                return "t5";
-            case Register::t6:
-                return "t6";
-            case Register::a0:
-                return "a0";
-            }
-            throw std::runtime_error("unknown register");
+            const auto idx = static_cast<size_t>(reg);
+            assert(idx < kRegisterNames_.size());
+            return kRegisterNames_[idx];
         }
 
         void reset_register_state()
         {
-            free_regs_.clear();
-            free_regs_.push_back(Register::t0);
-            free_regs_.push_back(Register::t1);
-            free_regs_.push_back(Register::t2);
-            free_regs_.push_back(Register::t3);
-            free_regs_.push_back(Register::t4);
-            free_regs_.push_back(Register::t5);
-            free_regs_.push_back(Register::t6);
+            // free_regs_.clear();
+            free_regs_ = {
+                Register::t0,
+                Register::t1,
+                Register::t2,
+                Register::t3,
+                Register::t4,
+                Register::t5,
+                Register::t6,
+                Register::a2,
+                Register::a3,
+                Register::a4,
+                Register::a5,
+                Register::a6,
+                Register::a7
+            };
             reg_map_.clear();
+        }
+
+        static std::string_view skip_first(std::string_view sv)
+        {
+            return sv.empty() ? sv : sv.substr(1);
         }
 
         void visit_slice(const koopa_raw_slice_t& slice)
@@ -123,97 +143,134 @@ namespace {
             case KOOPA_RVT_RETURN:
                 visit_return(kind.data.ret);
                 break;
-            case KOOPA_RVT_INTEGER:
-                break;
             case KOOPA_RVT_BINARY:
                 visit_binary(value);
                 break;
             default:
-                throw std::runtime_error("unsupported koopa value kind in riscv emitter");
+                break;
             }
         }
 
+        // 返回已经被分配的寄存器
         Register require_assigned_register(koopa_raw_value_t value)
         {
             auto it = reg_map_.find(value);
-            if (it == reg_map_.end()) {
-                throw std::runtime_error("value register not assigned");
-            }
+            assert(it != reg_map_.end());
             return it->second;
         }
 
+        // 分配新的寄存器
         Register assign_register_for_value(koopa_raw_value_t value)
         {
-            auto it = reg_map_.find(value);
-            if (it != reg_map_.end()) {
-                return it->second;
-            }
-            if (free_regs_.empty()) {
-                throw std::runtime_error("temporary register exhausted");
-            }
+            // 判断寄存器数目是否为零
+            assert(!free_regs_.empty());
             Register reg = free_regs_.front();
             free_regs_.pop_front();
             reg_map_[value] = reg;
             return reg;
         }
 
-        Register materialize_operand(koopa_raw_value_t value, Register preferred)
+        // 用于二元指令操作数分配
+        // 按 lhs->rhs 顺序检查并分配操作数寄存器。
+        // dst 复用本轮最后新分配的寄存器；若本轮无新分配则分配新寄存器。
+        Register ensure_operand_register(koopa_raw_value_t value, std::optional<Register>& last_new_reg)
         {
             const auto& kind = value->kind;
             if (kind.tag == KOOPA_RVT_INTEGER) {
+                // 操作数为0, 返回特定寄存器 x0
                 if (kind.data.integer.value == 0) {
                     return Register::x0;
                 }
-                emit_li(preferred, std::to_string(kind.data.integer.value));
-                return preferred;
-            }
-            return require_assigned_register(value);
-        }
-
-        Register materialize_operand(koopa_raw_value_t value)
-        {
-            const auto& kind = value->kind;
-            if (kind.tag == KOOPA_RVT_INTEGER) {
-                if (kind.data.integer.value == 0) {
-                    return Register::x0;
-                }
-                if (free_regs_.empty()) {
-                    throw std::runtime_error("temporary register exhausted");
-                }
-                Register reg = free_regs_.front();
-                free_regs_.pop_front();
+                Register reg = assign_register_for_value(value);
                 emit_li(reg, std::to_string(kind.data.integer.value));
+                last_new_reg = reg;
                 return reg;
             }
+
             return require_assigned_register(value);
         }
 
         void visit_binary(const koopa_raw_value_t& value)
         {
             const auto& binary = value->kind.data.binary;
-            Register dst = assign_register_for_value(value);
+            std::optional<Register> last_new_reg;
+
+            Register lhs = ensure_operand_register(binary.lhs, last_new_reg);
+            Register rhs = ensure_operand_register(binary.rhs, last_new_reg);
+
+            Register dst;
+            if (last_new_reg.has_value()) {
+                dst = *last_new_reg;
+            } else {
+                dst = assign_register_for_value(value);
+            }
+
+            reg_map_[value] = dst;
 
             switch (binary.op) {
             case KOOPA_RBO_EQ: {
-                Register lhs = materialize_operand(binary.lhs, dst);
-                Register rhs = materialize_operand(binary.rhs);
+                // lhs / rhs == 0 , 则只需要seqz一条指令
                 emit_xor(dst, lhs, rhs);
                 emit_seqz(dst, dst);
                 break;
             }
+            case KOOPA_RBO_NOT_EQ: {
+                // lhs / rhs == 0 , 则只需要snez一条指令
+                emit_xor(dst, lhs, rhs);
+                emit_snez(dst, dst);
+                break;
+            }
             case KOOPA_RBO_SUB: {
-                Register lhs = materialize_operand(binary.lhs);
-                Register rhs = materialize_operand(binary.rhs);
                 emit_sub(dst, lhs, rhs);
                 break;
             }
             case KOOPA_RBO_ADD: {
-                Register lhs = materialize_operand(binary.lhs);
-                Register rhs = materialize_operand(binary.rhs);
                 emit_add(dst, lhs, rhs);
                 break;
             }
+            case KOOPA_RBO_AND: {
+                emit_and(dst, lhs, rhs);
+                break;
+            }
+            case KOOPA_RBO_OR: {
+                emit_or(dst, lhs, rhs);
+                break;
+            }
+            case KOOPA_RBO_MUL: {
+                emit_mul(dst, lhs, rhs);
+                break;
+            }
+            case KOOPA_RBO_DIV: {
+                emit_div(dst, lhs, rhs);
+                break;
+            }
+            case KOOPA_RBO_MOD: {
+                emit_rem(dst, lhs, rhs);
+                break;
+            }
+            case KOOPA_RBO_GT: {
+                emit_gt(dst, lhs, rhs);
+                break;
+            }
+            case KOOPA_RBO_LT: {
+                emit_lt(dst, lhs, rhs);
+                break;
+            }
+            case KOOPA_RBO_GE: {
+                // a >= b == !(a < b)
+                emit_lt(dst, lhs, rhs);
+                emit_seqz(dst, dst);
+                break;
+            }
+            case KOOPA_RBO_LE: {
+                // a <= b == !(a > b)
+                emit_gt(dst, lhs, rhs);
+                emit_seqz(dst, dst);
+                break;
+            }
             default:
+                std::cout << "\n"
+                          << binary.op << std::endl;
                 throw std::runtime_error("unsupported koopa binary op in riscv emitter");
             }
         }
@@ -237,6 +294,16 @@ namespace {
             out_ << "  li    " << reg_name(rd) << ", " << imm << "\n";
         }
 
+        void emit_gt(Register rd, Register rs1, Register rs2)
+        {
+            out_ << "  sgt   " << reg_name(rd) << ", " << reg_name(rs1) << ", " << reg_name(rs2) << "\n";
+        }
+
+        void emit_lt(Register rd, Register rs1, Register rs2)
+        {
+            out_ << "  slt   " << reg_name(rd) << ", " << reg_name(rs1) << ", " << reg_name(rs2) << "\n";
+        }
+
         void emit_xor(Register rd, Register rs1, Register rs2)
         {
             out_ << "  xor   " << reg_name(rd) << ", " << reg_name(rs1) << ", " << reg_name(rs2) << "\n";
@@ -245,6 +312,11 @@ namespace {
         void emit_seqz(Register rd, Register rs)
         {
             out_ << "  seqz  " << reg_name(rd) << ", " << reg_name(rs) << "\n";
+        }
+
+        void emit_snez(Register rd, Register rs)
+        {
+            out_ << "  snez  " << reg_name(rd) << ", " << reg_name(rs) << "\n";
         }
 
         void emit_sub(Register rd, Register rs1, Register rs2)
@@ -257,12 +329,37 @@ namespace {
             out_ << "  add   " << reg_name(rd) << ", " << reg_name(rs1) << ", " << reg_name(rs2) << "\n";
         }
 
+        void emit_and(Register rd, Register rs1, Register rs2)
+        {
+            out_ << "  and   " << reg_name(rd) << ", " << reg_name(rs1) << ", " << reg_name(rs2) << "\n";
+        }
+
+        void emit_or(Register rd, Register rs1, Register rs2)
+        {
+            out_ << "  or    " << reg_name(rd) << ", " << reg_name(rs1) << ", " << reg_name(rs2) << "\n";
+        }
+
         void emit_mv(Register rd, Register rs)
         {
             out_ << "  mv    " << reg_name(rd) << ", " << reg_name(rs) << "\n";
         }
 
-        std::ostream& out_;
+        void emit_mul(Register rd, Register rs1, Register rs2)
+        {
+            out_ << "  mul   " << reg_name(rd) << ", " << reg_name(rs1) << ", " << reg_name(rs2) << "\n";
+        }
+
+        void emit_div(Register rd, Register rs1, Register rs2)
+        {
+            out_ << "  div   " << reg_name(rd) << ", " << reg_name(rs1) << ", " << reg_name(rs2) << "\n";
+        }
+
+        void emit_rem(Register rd, Register rs1, Register rs2)
+        {
+            out_ << "  rem   " << reg_name(rd) << ", " << reg_name(rs1) << ", " << reg_name(rs2) << "\n";
+        }
+
+        std::ostream& out_; // 与hello.koopa绑定
         std::deque<Register> free_regs_;
         std::unordered_map<koopa_raw_value_t, Register> reg_map_;
     };

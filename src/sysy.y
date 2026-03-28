@@ -16,6 +16,7 @@ using namespace std;
 
 %parse-param { std::unique_ptr<BaseAST> &ast}
 
+// union不可以存在非平凡类型（std::string）
 %union {
     std::string *str_val;
     int int_val;
@@ -26,20 +27,14 @@ using namespace std;
 // 注意 IDENT 和 INT_CONST 会返回 token 的值, 分别对应 str_val 和 int_val
 %token INT RETURN 
 %token <str_val> IDENT
-%token ADD SUB BANG
+%token ADD SUB BANG MUL DIV MOD EQ NEQ GT LT GE LE AND OR
 %token <int_val> INT_CONST
 
 // 非终结符的类型定义
-%type <ast_val> FuncDef FuncType Block Stmt Exp PrimaryExp UnaryExp
+%type <ast_val> FuncDef FuncType Block Stmt Exp PrimaryExp UnaryExp AddExp MulExp LOrExp RelExp EqExp LAndExp
 %type <int_val> Number
-%type <str_val> UnaryOp
+%type <str_val> UnaryOp AddOp MulOp RelOp EqOp
 %%
-
-// 开始符, CompUnit ::= FuncDef, 大括号后声明了解析完成, parser 要做的事情
-// 之前我们定义了 FuncDef 会返回一个 str_val, 也就是字符串指针
-// 而 parser 一旦解析完 CompUnit, 就说明所有的 token 都被解析了, 即解析结束了
-// 此时我们应该把 FuncDef 返回的结果收集起来, 作为 AST 传给调用 parser 的函数
-// $1 指代规则里第一个符号的返回值, 也就是 FuncDef 的返回值
 
 CompUnit
     : FuncDef {
@@ -49,16 +44,6 @@ CompUnit
     }
     ;
 
-// FuncDef ::= FuncType IDENT '(' ')' Block;
-// 我们这里可以直接写 '(' 和 ')', 因为之前在 lexer 里已经处理了单个字符的情况
-// 解析完成后, 把这些符号的结果收集起来, 然后拼成一个新的字符串, 作为结果返回
-// $$ 表示非终结符的返回值, 我们可以通过给这个符号赋值的方法来返回结果
-// 你可能会问, FuncType, IDENT 之类的结果已经是字符串指针了
-// 为什么还要用 unique_ptr 接住它们, 然后再解引用, 把它们拼成另一个字符串指针呢
-// 因为所有的字符串指针都是我们 new 出来的, new 出来的内存一定要 delete
-// 否则会发生内存泄漏, 而 unique_ptr 这种智能指针可以自动帮我们 delete
-// 虽然此处你看不出用 unique_ptr 和手动 delete 的区别, 但当我们定义了 AST 之后
-// 这种写法会省下很多内存管理的负担
 FuncDef
     : FuncType IDENT '(' ')' Block {
         auto ast = new FuncDefAST();
@@ -95,13 +80,161 @@ Stmt
     ;
 
 Exp
-    : UnaryExp {
-       auto ast = new ExpAST();
-       ast->unary_exp = unique_ptr<BaseAST>($1);
-       $$ = ast; 
+    : LOrExp {
+        auto ast = new ExpAST();
+        ast->lor_exp = unique_ptr<BaseAST>($1);
+        $$ = ast;
     }
     ;
-    
+
+LOrExp
+    : LAndExp {
+        auto ast = new LOrExpAST();
+        ast->epk = LOrExpKind::LAND;
+        ast->land_exp = unique_ptr<BaseAST>($1);
+        $$ = ast;
+    }
+    | LOrExp OR LAndExp {
+        auto ast = new LOrExpAST();
+        ast->epk = LOrExpKind::LORANDLAND;
+        ast->lor_exp = unique_ptr<BaseAST>($1);
+        ast->land_exp = unique_ptr<BaseAST>($3);
+        ast->op = "||";
+        $$ = ast;
+    }
+    ;
+
+LAndExp
+    : EqExp {
+        auto ast = new LAndExpAST();
+        ast->epk = LAndExpKind::EQ;
+        ast->eq_exp = unique_ptr<BaseAST>($1);
+        $$ = ast;
+    }
+    | LAndExp AND EqExp {
+        auto ast = new LAndExpAST();
+        ast->epk = LAndExpKind::LANDANDEQ;
+        ast->land_exp = unique_ptr<BaseAST>($1);
+        ast->eq_exp = unique_ptr<BaseAST>($3);
+        ast->op = "&&";
+        $$ = ast;
+    }
+    ;
+
+EqExp
+    : RelExp {
+        auto ast = new EqExpAST();
+        ast->epk = EqExpKind::REL;
+        ast->rel_exp = unique_ptr<BaseAST>($1);
+        $$ = ast;
+    }
+    | EqExp EqOp RelExp {
+        auto ast = new EqExpAST();
+        ast->epk = EqExpKind::EQANDREL;
+        ast->eq_exp = unique_ptr<BaseAST>($1);
+        ast->rel_exp = unique_ptr<BaseAST>($3);
+        ast->op = *unique_ptr<string>($2);
+        $$ = ast;
+    }
+    ;
+
+EqOp
+    : EQ {
+        $$ = new string("==");
+    }
+    | NEQ {
+        $$ = new string("!=");
+    }
+    ;
+
+RelExp
+    : AddExp {
+        auto ast = new RelExpAST();
+        ast->epk = RelExpKind::ADD;
+        ast->add_exp = unique_ptr<BaseAST>($1);
+        $$ = ast;
+    }
+    | RelExp RelOp AddExp {
+        auto ast = new RelExpAST();
+        ast->epk = RelExpKind::RELANDADD;
+        ast->rel_exp = unique_ptr<BaseAST>($1);
+        ast->add_exp = unique_ptr<BaseAST>($3);
+        ast->op = *unique_ptr<string>($2);
+        $$ = ast;
+    }
+    ;
+
+RelOp
+    : LT {
+        $$ = new string("<");
+    }
+    | GT {
+        $$ = new string(">");
+    }
+    | LE {
+        $$ = new string("<=");
+    }
+    | GE {
+        $$ = new string(">=");
+    }
+    ;
+
+
+MulExp
+    : UnaryExp {
+        auto ast = new MulExpAST();
+        ast->epk = MulExpKind::UNARY;
+        ast->unary_exp = unique_ptr<BaseAST>($1);
+        $$ = ast; 
+    }
+    | MulExp MulOp UnaryExp {
+        auto ast = new MulExpAST();
+        ast->mul_exp = unique_ptr<BaseAST>($1);
+        ast->unary_exp = unique_ptr<BaseAST>($3);
+        ast->epk = MulExpKind::MULANDUNARY;
+        ast->op = *unique_ptr<string>($2);
+        $$ = ast;
+    }
+    ;
+
+AddExp
+    : MulExp {
+        auto ast = new AddExpAST();
+        ast->epk = AddExpKind::MUL;
+        ast->mul_exp = unique_ptr<BaseAST>($1);
+        $$ = ast;
+    }
+    | AddExp AddOp MulExp {
+        auto ast = new AddExpAST();
+        ast->epk = AddExpKind::ADDANDMUL;
+        ast->add_exp = unique_ptr<BaseAST>($1);
+        ast->mul_exp = unique_ptr<BaseAST>($3);
+        ast->op = *unique_ptr<string>($2);
+        $$ = ast;
+    }
+    ;
+
+MulOp
+    : MUL {
+        $$ = new string("*");
+    }
+    | DIV {
+        $$ = new string("/");
+    }
+    | MOD {
+        $$ = new string("%");
+    }
+    ;
+
+AddOp
+    : ADD {
+        $$ = new string("+");
+    }
+    | SUB {
+        $$ = new string("-");
+    }
+    ;
+
 PrimaryExp
     : '(' Exp ')' {
         auto ast = new PrimaryExpAST();

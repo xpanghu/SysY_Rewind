@@ -1,7 +1,7 @@
 #include "koopa_ir.h"
 
 namespace koopa_ir {
-
+// 这一部分只需要顺序遍历 koopa_ir 就可以得到 koopa_raw_program_t
 KoopaRawBuilder::KoopaRawBuilder()
 {
     int32_type_.tag = KOOPA_RTT_INT32;
@@ -58,6 +58,7 @@ koopa_raw_function_t KoopaRawBuilder::lower_function(const IRFunction& function)
         current_blocks_.push_back(lower_basic_block(block));
     }
 
+    // 构建函数类型
     koopa_raw_type_kind_t function_type {};
     function_type.tag = KOOPA_RTT_FUNCTION;
     function_type.data.function.params = make_empty_slice(KOOPA_RSIK_TYPE);
@@ -65,10 +66,11 @@ koopa_raw_function_t KoopaRawBuilder::lower_function(const IRFunction& function)
     function_type_kinds_.push_back(function_type);
 
     koopa_raw_function_data_t func_data {};
-    func_data.ty = &function_type_kinds_.back();
 
-    std::string func_name = to_raw_specific_name(function.name);
-    func_data.name = save_name(func_name);
+    func_data.ty = &function_type_kinds_.back();
+    // 在函数名称前加 @
+    func_data.name = save_name(to_raw_specific_name(function.name));
+    // 函数参数列表, 类型为koopa_raw_value_t
     func_data.params = make_empty_slice(KOOPA_RSIK_VALUE);
     func_data.bbs = make_slice(current_blocks_, KOOPA_RSIK_BASIC_BLOCK);
 
@@ -86,8 +88,9 @@ koopa_raw_basic_block_t KoopaRawBuilder::lower_basic_block(const IRBasicBlock& b
 
     koopa_raw_basic_block_data_t bb_data {};
 
-    std::string block_name = to_raw_temp_name(block.name);
-    bb_data.name = save_name(block_name);
+    // 在块名称前加 %
+    bb_data.name = save_name(to_raw_temp_name(block.name));
+    // 基本块参数列表
     bb_data.params = make_empty_slice(KOOPA_RSIK_VALUE);
     bb_data.used_by = make_empty_slice(KOOPA_RSIK_VALUE);
     bb_data.insts = make_slice(current_insts_, KOOPA_RSIK_VALUE);
@@ -104,22 +107,25 @@ koopa_raw_value_t KoopaRawBuilder::lower_instruction(const IRInstruction& inst)
         const auto value = lower_ir_value(inst.dst);
         return new_return(value);
     }
-    case IRInstruction::Kind::kUnary: {
-        const auto lhs = lower_ir_value(inst.lhs);
-        const auto rhs = lower_ir_value(inst.rhs);
-        const auto op = lower_binary_op(inst.op);
-
-        std::string value_name;
-        if (inst.dst.kind == IRValue::Kind::VIRTUAL_REGISTER) {
-            value_name = to_raw_temp_name(std::to_string(inst.dst.virtual_register_name));
-        }
-
-        const auto value = new_binary(op, lhs, rhs, value_name);
-        bind_virtual_register(inst.dst, value);
-        return value;
+    case IRInstruction::Kind::kBinary:
+        return make_binary(inst);
+    default:
+        throw std::runtime_error("Unsupported instruction kind in raw lowering");
     }
-    }
-    throw std::runtime_error("Unsupported instruction kind in raw lowering");
+}
+koopa_raw_value_t KoopaRawBuilder::make_binary(const IRInstruction& inst)
+{
+    const auto lhs = lower_ir_value(inst.lhs);
+    const auto rhs = lower_ir_value(inst.rhs);
+    const auto op = lower_binary_op(inst.op);
+
+    assert(inst.dst.kind == IRValue::Kind::VIRTUAL_REGISTER);
+    std::string value_name = to_raw_temp_name(std::to_string(inst.dst.virtual_register_name));
+
+    const auto value = new_binary(op, lhs, rhs, value_name);
+    bind_virtual_register(inst.dst, value);
+
+    return value;
 }
 
 // 获取操作数（直接数或者虚拟寄存器）
@@ -148,23 +154,37 @@ koopa_raw_binary_op_t KoopaRawBuilder::lower_binary_op(IRInstruction::Op op)
         return KOOPA_RBO_ADD;
     case IRInstruction::Op::SUB:
         return KOOPA_RBO_SUB;
+    case IRInstruction::Op::MUL:
+        return KOOPA_RBO_MUL;
+    case IRInstruction::Op::DIV:
+        return KOOPA_RBO_DIV;
+    case IRInstruction::Op::MOD:
+        return KOOPA_RBO_MOD;
+    case IRInstruction::Op::OR:
+        return KOOPA_RBO_OR;
+    case IRInstruction::Op::AND:
+        return KOOPA_RBO_AND;
+    case IRInstruction::Op::LT:
+        return KOOPA_RBO_LT;
+    case IRInstruction::Op::GT:
+        return KOOPA_RBO_GT;
+    case IRInstruction::Op::LE:
+        return KOOPA_RBO_LE;
+    case IRInstruction::Op::GE:
+        return KOOPA_RBO_GE;
     case IRInstruction::Op::EQ:
         return KOOPA_RBO_EQ;
+    case IRInstruction::Op::NEQ:
+        return KOOPA_RBO_NOT_EQ;
     }
     throw std::runtime_error("unsupported IR binary op");
 }
 
-// 虚拟寄存器号与对应的koopa_raw_value_t 绑定
+// 虚拟寄存器号和 koopa_raw_value_t 绑定
 void KoopaRawBuilder::bind_virtual_register(const IRValue& value, koopa_raw_value_t raw_value)
 {
-    if (value.kind != IRValue::Kind::VIRTUAL_REGISTER) {
-        return;
-    }
-
     const int id = value.virtual_register_name;
-    if (id < 0) {
-        throw std::runtime_error("invalid virtual register id");
-    }
+    assert(id >= 0);
 
     if (static_cast<size_t>(id) >= current_virtual_values_.size()) {
         current_virtual_values_.resize(static_cast<size_t>(id) + 1, nullptr);
@@ -173,6 +193,7 @@ void KoopaRawBuilder::bind_virtual_register(const IRValue& value, koopa_raw_valu
     current_virtual_values_[id] = raw_value;
 }
 
+// 对应 koopa_raw_value_tag_t 中 KOOPA_RSIK_VALUE
 // 构造值对象,类型是i32
 koopa_raw_value_t KoopaRawBuilder::new_integer(int value)
 {
@@ -186,6 +207,7 @@ koopa_raw_value_t KoopaRawBuilder::new_integer(int value)
     return &value_datas_.back();
 }
 
+// 对应 koopa_raw_value_tag_t 中 KOOPA_RSIV_BINARY
 // 构造二元运算,ty是i32, name是当前操作结果的寄存器名
 koopa_raw_value_t KoopaRawBuilder::new_binary(koopa_raw_binary_op_t op,
     koopa_raw_value_t lhs, koopa_raw_value_t rhs,
@@ -203,6 +225,7 @@ koopa_raw_value_t KoopaRawBuilder::new_binary(koopa_raw_binary_op_t op,
     return &value_datas_.back();
 }
 
+// 对应 koopa_raw_value_tag_t 中 KOOPA_RVT_RETURN
 // 构造返回指令, 类型是unit
 koopa_raw_value_t KoopaRawBuilder::new_return(koopa_raw_value_t value)
 {

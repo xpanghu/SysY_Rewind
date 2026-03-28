@@ -1,8 +1,8 @@
 #pragma once
 
-#include "../tmp/koopa.h"
+#include "koopa.h"
 
-#include <assert.h>
+#include <cassert>
 #include <deque>
 #include <stdexcept>
 #include <string>
@@ -26,19 +26,40 @@ struct IRValue {
 struct IRInstruction {
     enum class Kind {
         kRet,
-        kUnary
+        kBinary,
     };
 
     enum class Op {
+        MUL,
+        DIV,
+        MOD,
         ADD,
         SUB,
-        EQ
+        EQ,
+        NEQ,
+        AND, // 逻辑与
+        OR, // 按位或
+        LT,
+        GT,
+        LE,
+        GE,
     };
+
+    IRInstruction() = default;
+
+    IRInstruction(Kind kind, Op op, IRValue lhs, IRValue rhs, IRValue dst)
+        : kind(kind)
+        , op(op)
+        , dst(dst)
+        , lhs(lhs)
+        , rhs(rhs)
+    {
+    }
 
     Kind kind;
     Op op;
 
-    // inst  返回值
+    // inst 指令本身值
     IRValue dst;
     // inst 左操作数
     IRValue lhs;
@@ -62,8 +83,6 @@ struct IRProgram {
     std::vector<IRFunction> functions;
 };
 
-// Exports custom IR structs to libkoopa raw program and provides dump helpers.
-// Returned raw program references this object's internal storage.
 class KoopaRawBuilder {
 public:
     KoopaRawBuilder();
@@ -81,6 +100,7 @@ private:
     koopa_raw_binary_op_t lower_binary_op(IRInstruction::Op op);
     void bind_virtual_register(const IRValue& value, koopa_raw_value_t raw_value);
 
+    koopa_raw_value_t make_binary(const IRInstruction& inst);
     koopa_raw_value_t new_integer(int value);
     koopa_raw_value_t new_binary(koopa_raw_binary_op_t op,
         koopa_raw_value_t lhs, koopa_raw_value_t rhs,
