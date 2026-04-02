@@ -5,7 +5,6 @@
 %{
 
 #include "ast.h"
-
 // 声明 lexer函数和函数处理函数
 int yylex();
 void yyerror(std::unique_ptr<BaseAST> &ast, const char *s);
@@ -20,20 +19,30 @@ using namespace std;
 %union {
     std::string *str_val;
     int int_val;
+    UnaryOp unary_op;
+    BinaryOp binary_op;
     BaseAST *ast_val;
+    std::vector<std::unique_ptr<BaseAST>> *ast_list;
 }
+
+%destructor {
+    delete $$;
+} <ast_list>
 
 // lexer 返回的所有 token 种类的声明
 // 注意 IDENT 和 INT_CONST 会返回 token 的值, 分别对应 str_val 和 int_val
-%token INT RETURN 
+%token INT RETURN CONST
 %token <str_val> IDENT
 %token ADD SUB BANG MUL DIV MOD EQ NEQ GT LT GE LE AND OR
 %token <int_val> INT_CONST
 
 // 非终结符的类型定义
 %type <ast_val> FuncDef FuncType Block Stmt Exp PrimaryExp UnaryExp AddExp MulExp LOrExp RelExp EqExp LAndExp
+%type <ast_val> Decl ConstDecl ConstDef ConstInitVal BlockItem ConstExp 
+%type <ast_list> ConstDefList BlockItemList
 %type <int_val> Number
-%type <str_val> UnaryOp AddOp MulOp RelOp EqOp
+%type <unary_op> UnaryOp
+%type <binary_op> AddOp MulOp RelOp EqOp
 %%
 
 CompUnit
@@ -62,19 +71,94 @@ FuncType
     }
     ;
 
-Block
-    : '{' Stmt '}' {
-        auto ast = new BlockAST();
-        ast->stmt = unique_ptr<BaseAST>($2);
+Decl
+    : ConstDecl {
+        auto ast = new DeclAST();
+        ast->const_decl = unique_ptr<BaseAST>($1); 
         $$ = ast;
+    }
+    ;
+
+ConstDecl
+    : CONST INT ConstDefList ';' {
+        auto ast = new ConstDeclAST();
+        ast->type = BType::INT;
+        ast->const_defs = std::move(*($3));
+        delete $3;
+        $$ = ast;
+    }
+    ;
+
+ConstDefList
+    : ConstDef {
+        auto const_def_list = new vector<unique_ptr<BaseAST>>();
+        const_def_list->push_back(unique_ptr<BaseAST>($1));
+        $$ = const_def_list;
+    }
+    | ConstDefList ',' ConstDef {
+        auto const_def_list = $1;
+        const_def_list->push_back(unique_ptr<BaseAST>($3));
+        $$ = const_def_list;
+    }
+    ;
+
+ConstDef    
+    : IDENT '=' ConstInitVal {
+        auto ast = new ConstDefAST();
+        ast->ident = *unique_ptr<string>($1);
+        ast->const_init_val = unique_ptr<BaseAST>($3);
+        $$ = ast;
+    }
+    ;
+
+ConstInitVal
+    : ConstExp {
+        auto ast = new ConstInitValAST();
+        ast->const_exp = unique_ptr<BaseAST>($1);
+        $$ = ast;
+    }
+    ;
+
+ConstExp
+    : Exp {
+        $$ = $1;
+    }
+    ;
+
+Block
+    : '{' BlockItemList '}' {
+        auto ast = new BlockAST();
+        ast->items = std::move(*($2)); 
+        delete $2;
+        // ast->stmt = unique_ptr<BaseAST>($2);
+        $$ = ast;
+    }
+    ;
+
+BlockItemList
+    : %empty {
+        $$ = nullptr;
+    }
+    | BlockItemList BlockItem {
+        auto block_item_list = $1 == nullptr ? new vector<unique_ptr<BaseAST>>() : $1;
+        block_item_list->push_back(unique_ptr<BaseAST>($2)); 
+        $$ = block_item_list;
+    }
+    ;
+
+BlockItem
+    : Decl {
+        $$ = $1;
+    }
+    | Stmt {
+        $$ = $1;
     }
     ;
 
 Stmt
     : RETURN Exp ';' {
         auto ast = new StmtAST();
-        ast->kind = StmtKind::RETURN;
-        ast->return_exp = unique_ptr<BaseAST>($2);
+        ast->payload = StmtAST::Return { unique_ptr<BaseAST>($2) };
         $$ = ast;
     }
     ;
@@ -90,16 +174,16 @@ Exp
 LOrExp
     : LAndExp {
         auto ast = new LOrExpAST();
-        ast->epk = LOrExpKind::LAND;
-        ast->land_exp = unique_ptr<BaseAST>($1);
+        ast->payload = LOrExpAST::Simple { unique_ptr<BaseAST>($1) };
         $$ = ast;
     }
     | LOrExp OR LAndExp {
         auto ast = new LOrExpAST();
-        ast->epk = LOrExpKind::LORANDLAND;
-        ast->lor_exp = unique_ptr<BaseAST>($1);
-        ast->land_exp = unique_ptr<BaseAST>($3);
-        ast->op = "||";
+        ast->payload = LOrExpAST::Binary {
+            BinaryOp::LOR,
+            unique_ptr<BaseAST>($1),
+            unique_ptr<BaseAST>($3)
+        };
         $$ = ast;
     }
     ;
@@ -107,16 +191,16 @@ LOrExp
 LAndExp
     : EqExp {
         auto ast = new LAndExpAST();
-        ast->epk = LAndExpKind::EQ;
-        ast->eq_exp = unique_ptr<BaseAST>($1);
+        ast->payload = LAndExpAST::Simple { unique_ptr<BaseAST>($1) };
         $$ = ast;
     }
     | LAndExp AND EqExp {
         auto ast = new LAndExpAST();
-        ast->epk = LAndExpKind::LANDANDEQ;
-        ast->land_exp = unique_ptr<BaseAST>($1);
-        ast->eq_exp = unique_ptr<BaseAST>($3);
-        ast->op = "&&";
+        ast->payload = LAndExpAST::Binary {
+            BinaryOp::LAND,
+            unique_ptr<BaseAST>($1),
+            unique_ptr<BaseAST>($3)
+        };
         $$ = ast;
     }
     ;
@@ -124,58 +208,58 @@ LAndExp
 EqExp
     : RelExp {
         auto ast = new EqExpAST();
-        ast->epk = EqExpKind::REL;
-        ast->rel_exp = unique_ptr<BaseAST>($1);
+        ast->payload = EqExpAST::Simple { unique_ptr<BaseAST>($1) };
         $$ = ast;
     }
     | EqExp EqOp RelExp {
         auto ast = new EqExpAST();
-        ast->epk = EqExpKind::EQANDREL;
-        ast->eq_exp = unique_ptr<BaseAST>($1);
-        ast->rel_exp = unique_ptr<BaseAST>($3);
-        ast->op = *unique_ptr<string>($2);
+        ast->payload = EqExpAST::Binary {
+            $2,
+            unique_ptr<BaseAST>($1),
+            unique_ptr<BaseAST>($3)
+        };
         $$ = ast;
     }
     ;
 
 EqOp
     : EQ {
-        $$ = new string("==");
+        $$ = BinaryOp::EQ;
     }
     | NEQ {
-        $$ = new string("!=");
+        $$ = BinaryOp::NEQ;
     }
     ;
 
 RelExp
     : AddExp {
         auto ast = new RelExpAST();
-        ast->epk = RelExpKind::ADD;
-        ast->add_exp = unique_ptr<BaseAST>($1);
+        ast->payload = RelExpAST::Simple { unique_ptr<BaseAST>($1) };
         $$ = ast;
     }
     | RelExp RelOp AddExp {
         auto ast = new RelExpAST();
-        ast->epk = RelExpKind::RELANDADD;
-        ast->rel_exp = unique_ptr<BaseAST>($1);
-        ast->add_exp = unique_ptr<BaseAST>($3);
-        ast->op = *unique_ptr<string>($2);
+        ast->payload = RelExpAST::Binary {
+            $2,
+            unique_ptr<BaseAST>($1),
+            unique_ptr<BaseAST>($3)
+        };
         $$ = ast;
     }
     ;
 
 RelOp
     : LT {
-        $$ = new string("<");
+        $$ = BinaryOp::LT;
     }
     | GT {
-        $$ = new string(">");
+        $$ = BinaryOp::GT;
     }
     | LE {
-        $$ = new string("<=");
+        $$ = BinaryOp::LE;
     }
     | GE {
-        $$ = new string(">=");
+        $$ = BinaryOp::GE;
     }
     ;
 
@@ -183,16 +267,16 @@ RelOp
 MulExp
     : UnaryExp {
         auto ast = new MulExpAST();
-        ast->epk = MulExpKind::UNARY;
-        ast->unary_exp = unique_ptr<BaseAST>($1);
-        $$ = ast; 
+        ast->payload = MulExpAST::Simple { unique_ptr<BaseAST>($1) };
+        $$ = ast;
     }
     | MulExp MulOp UnaryExp {
         auto ast = new MulExpAST();
-        ast->mul_exp = unique_ptr<BaseAST>($1);
-        ast->unary_exp = unique_ptr<BaseAST>($3);
-        ast->epk = MulExpKind::MULANDUNARY;
-        ast->op = *unique_ptr<string>($2);
+        ast->payload = MulExpAST::Binary {
+            $2,
+            unique_ptr<BaseAST>($1),  // mul_exp (lhs)
+            unique_ptr<BaseAST>($3)   // unary_exp (rhs)
+        };
         $$ = ast;
     }
     ;
@@ -200,53 +284,56 @@ MulExp
 AddExp
     : MulExp {
         auto ast = new AddExpAST();
-        ast->epk = AddExpKind::MUL;
-        ast->mul_exp = unique_ptr<BaseAST>($1);
+        ast->payload = AddExpAST::Simple { unique_ptr<BaseAST>($1) };
         $$ = ast;
     }
     | AddExp AddOp MulExp {
         auto ast = new AddExpAST();
-        ast->epk = AddExpKind::ADDANDMUL;
-        ast->add_exp = unique_ptr<BaseAST>($1);
-        ast->mul_exp = unique_ptr<BaseAST>($3);
-        ast->op = *unique_ptr<string>($2);
+        ast->payload = AddExpAST::Binary {
+            $2,
+            unique_ptr<BaseAST>($1),
+            unique_ptr<BaseAST>($3)
+        };
         $$ = ast;
     }
     ;
 
 MulOp
     : MUL {
-        $$ = new string("*");
+        $$ = BinaryOp::MUL;
     }
     | DIV {
-        $$ = new string("/");
+        $$ = BinaryOp::DIV;
     }
     | MOD {
-        $$ = new string("%");
+        $$ = BinaryOp::MOD;
     }
     ;
 
 AddOp
     : ADD {
-        $$ = new string("+");
+        $$ = BinaryOp::ADD;
     }
     | SUB {
-        $$ = new string("-");
+        $$ = BinaryOp::SUB;
     }
     ;
 
 PrimaryExp
     : '(' Exp ')' {
         auto ast = new PrimaryExpAST();
-        ast->epk = PrimaryExpKind::EXP;
-        ast->exp = unique_ptr<BaseAST>($2);
+        ast->payload = PrimaryExpAST::Expression { unique_ptr<BaseAST>($2) };
         $$ = ast;
     }
     | Number {
         auto ast = new PrimaryExpAST();
-        ast->epk = PrimaryExpKind::NUM;
-        ast->number = $1;
-        $$ = ast;  
+        ast->payload = PrimaryExpAST::Number { $1 };
+        $$ = ast;
+    }
+    | IDENT {
+        auto ast = new PrimaryExpAST();
+        ast->payload = PrimaryExpAST::LValue { *unique_ptr<string>($1) };
+        $$ = ast;
     }
     ;
 
@@ -254,28 +341,25 @@ PrimaryExp
 UnaryExp
     : PrimaryExp {
         auto ast = new UnaryExpAST();
-        ast->epk = UnaryExpKind::PRIMARY;
-        ast->exp = unique_ptr<BaseAST>($1);
+        ast->payload = UnaryExpAST::Primary { unique_ptr<BaseAST>($1) };
         $$ = ast;
     }
     | UnaryOp UnaryExp {
         auto ast = new UnaryExpAST();
-        ast->epk = UnaryExpKind::OP;
-        ast->op  = *unique_ptr<string>($1); 
-        ast->exp = unique_ptr<BaseAST>($2);
+        ast->payload = UnaryExpAST::Unary { $1, unique_ptr<BaseAST>($2) };
         $$ = ast;
     }
     ;
 
 UnaryOp
     : ADD {
-        $$ = new string("+");
+        $$ = UnaryOp::PLUS;
     }
     | SUB {
-        $$ = new string("-");
+        $$ = UnaryOp::MINUS;
     }
     | BANG {
-        $$ = new string("!");
+        $$ = UnaryOp::NOT;
     } 
     ;
 

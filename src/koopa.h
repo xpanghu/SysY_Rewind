@@ -262,7 +262,7 @@ typedef struct {
 typedef struct {
     /// Source.
     koopa_raw_value_t src;
-    /// Index.
+    /// andex.
     koopa_raw_value_t index;
 } koopa_raw_get_ptr_t;
 

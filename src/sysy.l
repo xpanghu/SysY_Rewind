@@ -33,6 +33,7 @@ Hexadecimal   0[xX][0-9a-fA-F]+
 {LineComment}   { /* 忽略 */ }
 {BlockComment}  { /* 忽略 */ }
 
+"const"         { return CONST; }
 "int"           { return INT; }
 "return"        { return RETURN; }
 "+"             { return ADD; }

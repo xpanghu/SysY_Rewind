@@ -1,7 +1,7 @@
 #include "ast.h"
-#include "koopa.h"
-#include "koopa_ir.h"
 #include "koopa_ir_builder.h"
+#include "rewind_ir.h"
+#include "rewind_ir_builder.h"
 #include "riscv.h"
 #include <cassert>
 #include <cstdio>
@@ -38,19 +38,20 @@ int main(int argc, const char* argv[])
         throw runtime_error("yyparse failed: invalid SysY input or grammar action error");
     }
 
+    ofstream out(output);
     // 输出解析得到的 AST
     if (std::string(mode) == "-ast") {
-        ast->Dump();
+        ast->Dump(out);
         return 0;
     }
 
-    // 将解析得到的 AST 先转换为自定义的 koopaIR 结构，再转换为raw_program, 再转换为koopa IR程序
-    koopa_ir::KoopaIRBuilder ir_builder;
-    auto ir_program = ir_builder.build(*ast);
+    // ast -> rewind IR
+    rewind_ir::RewindIRBuilder rewind_builder;
+    rewind_ir::IRModule module = rewind_builder.build(*ast);
 
-    koopa_ir::KoopaRawBuilder raw_builder;
-    const auto raw_program = raw_builder.build(ir_program);
-    ofstream out(output);
+    // rewind IR -> koopa IR
+    rewind_ir::KoopaRawBuilder koopa_builder;
+    const auto raw_program = koopa_builder.build(module);
 
     if (std::string(mode) == "-koopa") {
         // 由 koopa_raw_program_t 转换为 koopa_program
@@ -59,9 +60,11 @@ int main(int argc, const char* argv[])
         assert(ec == KOOPA_EC_SUCCESS);
 
         // 由 koopa_program 转换为 koopaIR 字符串形式, 并输入到 output 文件中
-        out << koopa_ir::dump_koopa_program_to_string(koopa_program);
+        out << rewind_ir::dump_koopa_program_to_string(koopa_program);
         koopa_delete_program(koopa_program);
-    } else if (std::string(mode) == "-riscv") {
+    }
+
+    if (std::string(mode) == "-riscv") {
         riscv::emit_program(raw_program, out);
     }
 

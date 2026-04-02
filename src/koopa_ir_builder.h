@@ -1,45 +1,54 @@
-#pragma once
-
-#include <string>
-
-#include "ast.h"
-#include "koopa_ir.h"
-
-namespace koopa_ir {
-
-class KoopaIRBuilder {
+#include "koopa.h"
+#include "rewind_ir.h"
+namespace rewind_ir {
+class KoopaRawBuilder {
 public:
-    IRProgram build(const BaseAST& ast);
+    KoopaRawBuilder();
+
+    koopa_raw_program_t build(const IRModule& module);
 
 private:
-    // exp包含所有的指令集以及表达式自身value
-    struct LoweredValue {
-        IRValue value;
-        std::vector<IRInstruction> insts;
+    void reset();
 
-        LoweredValue() = default;
-    };
+    koopa_raw_type_t lower_type(const std::string& type_name);
+    koopa_raw_function_t lower_function(const IRFunction& function);
+    koopa_raw_basic_block_t lower_basic_block(const IRBasicBlock& block);
+    koopa_raw_value_t lower_instruction(const IRInstruction& inst);
+    koopa_raw_value_t lower_ir_value(const IRValue& value);
+    koopa_raw_binary_op_t lower_binary_op(IRBinaryOp op);
 
-    IRValue new_immediate(int value) const;
-    IRValue new_virtual_register();
-    IRInstruction new_instruction(IRInstruction::Kind kind, IRInstruction::Op op, IRValue lhs, IRValue rhs);
+    koopa_raw_value_t make_binary(const IRInstruction& inst);
+    koopa_raw_value_t new_integer(int value);
+    koopa_raw_value_t new_binary(koopa_raw_binary_op_t op,
+        koopa_raw_value_t lhs, koopa_raw_value_t rhs,
+        const std::string& name);
+    koopa_raw_value_t new_return(koopa_raw_value_t value);
+    std::string to_raw_specific_name(const std::string& name);
+    std::string to_raw_temp_name(const std::string& name);
 
-    int next_virtual_register_ = 0;
+    const char* save_name(const std::string& name);
+    static koopa_raw_slice_t make_slice(std::vector<const void*>& items,
+        koopa_raw_slice_item_kind_t kind);
+    static koopa_raw_slice_t make_empty_slice(koopa_raw_slice_item_kind_t kind);
 
-    IRProgram lower_comp_unit(const CompUnitAST& ast);
-    IRFunction lower_func_def(const FuncDefAST& ast);
-    std::string lower_func_type(const FuncTypeAST& ast) const;
-    IRBasicBlock lower_block(const BlockAST& ast);
-    std::vector<IRInstruction> lower_stmt(const StmtAST& ast);
-    LoweredValue lower_exp(const ExpAST& ast);
-    LoweredValue lower_lor_exp(const LOrExpAST& ast);
-    LoweredValue lower_land_exp(const LAndExpAST& ast);
-    LoweredValue lower_eq_exp(const EqExpAST& ast);
-    LoweredValue lower_rel_exp(const RelExpAST& ast);
-    LoweredValue lower_add_exp(const AddExpAST& ast);
-    LoweredValue lower_mul_exp(const MulExpAST& ast);
-    LoweredValue lower_unary_exp(const UnaryExpAST& ast);
-    LoweredValue lower_primary_exp(const PrimaryExpAST& ast);
+    koopa_raw_type_kind_t int32_type_ {};
+    koopa_raw_type_kind_t unit_type_ {};
+
+    koopa_raw_program_t program_ {};
+
+    // koopa_raw_program_t 中数据都是指针类型，通过容器将这些数据存储起来
+    std::deque<std::string> names_;
+    std::deque<koopa_raw_type_kind_t> function_type_kinds_;
+    std::deque<koopa_raw_value_data_t> value_datas_;
+    std::deque<koopa_raw_basic_block_data_t> bb_datas_;
+    std::deque<koopa_raw_function_data_t> func_datas_;
+
+    // 临时存储的 functions, blocks, insts等, 用于保存遍历过程中的数据
+    std::vector<const void*> global_values_;
+    std::vector<const void*> functions_;
+    std::vector<const void*> current_blocks_;
+    std::vector<const void*> current_insts_;
 };
 
-} // namespace koopa_ir
+std::string dump_koopa_program_to_string(koopa_program_t program);
+}

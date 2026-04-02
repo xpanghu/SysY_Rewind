@@ -1,0 +1,430 @@
+#include "ast.h"
+
+namespace ast_dump_detail {
+
+IndentToken indent(int n)
+{
+    return { n };
+}
+
+std::ostream& operator<<(std::ostream& out, IndentToken token)
+{
+    for (int i = 0; i < token.n; i++) {
+        out.put(' ');
+    }
+    return out;
+}
+
+std::string_view unary_op_to_cstr(UnaryOp op)
+{
+    switch (op) {
+    case UnaryOp::PLUS:
+        return "+";
+    case UnaryOp::MINUS:
+        return "-";
+    case UnaryOp::NOT:
+        return "!";
+    default:
+        return "UNKNOWN";
+    }
+}
+
+std::string_view binary_op_to_cstr(BinaryOp op)
+{
+    switch (op) {
+    case BinaryOp::MUL:
+        return "*";
+    case BinaryOp::DIV:
+        return "/";
+    case BinaryOp::MOD:
+        return "%";
+    case BinaryOp::ADD:
+        return "+";
+    case BinaryOp::SUB:
+        return "-";
+    case BinaryOp::EQ:
+        return "==";
+    case BinaryOp::NEQ:
+        return "!=";
+    case BinaryOp::LT:
+        return "<";
+    case BinaryOp::GT:
+        return ">";
+    case BinaryOp::LE:
+        return "<=";
+    case BinaryOp::GE:
+        return ">=";
+    case BinaryOp::LAND:
+        return "&&";
+    case BinaryOp::LOR:
+        return "||";
+    default:
+        return "UNKNOWN";
+    }
+}
+
+std::string_view btype_to_cstr(BType type)
+{
+    switch (type) {
+    case BType::INT:
+        return "int";
+    default:
+        return "UNKNOWN";
+    }
+}
+
+} // namespace ast_dump_detail
+
+void CompUnitAST::Dump(std::ostream& out, int indent) const
+{
+    out << ast_dump_detail::indent(indent) << "CompUnitAST {\n";
+    if (func_def) {
+        func_def->Dump(out, indent + 2);
+        out << "\n";
+    }
+    out << ast_dump_detail::indent(indent) << "}";
+}
+
+void FuncDefAST::Dump(std::ostream& out, int indent) const
+{
+    out << ast_dump_detail::indent(indent) << "FuncDefAST {\n";
+    if (func_type) {
+        out << ast_dump_detail::indent(indent + 2) << "func_type:\n";
+        func_type->Dump(out, indent + 4);
+        out << "\n";
+    }
+    out << ast_dump_detail::indent(indent + 2) << "ident: " << ident << "\n";
+    if (block) {
+        out << ast_dump_detail::indent(indent + 2) << "block:\n";
+        block->Dump(out, indent + 4);
+        out << "\n";
+    }
+    out << ast_dump_detail::indent(indent) << "}";
+}
+
+void FuncTypeAST::Dump(std::ostream& out, int indent) const
+{
+    out << ast_dump_detail::indent(indent) << "FuncTypeAST { type: " << type << " }";
+}
+
+void DeclAST::Dump(std::ostream& out, int indent) const
+{
+    out << ast_dump_detail::indent(indent) << "DeclAST {\n";
+    if (const_decl) {
+        const_decl->Dump(out, indent + 2);
+        out << "\n";
+    }
+    out << ast_dump_detail::indent(indent) << "}";
+}
+
+void ConstDeclAST::Dump(std::ostream& out, int indent) const
+{
+    out << ast_dump_detail::indent(indent) << "ConstDeclAST {\n";
+    out << ast_dump_detail::indent(indent + 2) << "type: "
+        << ast_dump_detail::btype_to_cstr(type) << "\n";
+    out << ast_dump_detail::indent(indent + 2) << "const_defs: [\n";
+    for (const auto& def : const_defs) {
+        if (def) {
+            def->Dump(out, indent + 4);
+            out << "\n";
+        }
+    }
+    out << ast_dump_detail::indent(indent + 2) << "]\n";
+    out << ast_dump_detail::indent(indent) << "}";
+}
+
+void ConstDefAST::Dump(std::ostream& out, int indent) const
+{
+    out << ast_dump_detail::indent(indent) << "ConstDefAST {\n";
+    out << ast_dump_detail::indent(indent + 2) << "ident: " << ident << "\n";
+    if (const_init_val) {
+        out << ast_dump_detail::indent(indent + 2) << "init_val:\n";
+        const_init_val->Dump(out, indent + 4);
+        out << "\n";
+    }
+    out << ast_dump_detail::indent(indent) << "}";
+}
+
+void ConstInitValAST::Dump(std::ostream& out, int indent) const
+{
+    out << ast_dump_detail::indent(indent) << "ConstInitValAST {\n";
+    if (const_exp) {
+        const_exp->Dump(out, indent + 2);
+        out << "\n";
+    }
+    out << ast_dump_detail::indent(indent) << "}";
+}
+
+void BlockAST::Dump(std::ostream& out, int indent) const
+{
+    out << ast_dump_detail::indent(indent) << "BlockAST {\n";
+    for (const auto& item : items) {
+        if (item) {
+            item->Dump(out, indent + 2);
+            out << "\n";
+        }
+    }
+    out << ast_dump_detail::indent(indent) << "}";
+}
+
+void StmtAST::Dump(std::ostream& out, int indent) const
+{
+    out << ast_dump_detail::indent(indent) << "StmtAST {\n";
+    std::visit([&](const auto& stmt) {
+        using T = std::decay_t<decltype(stmt)>;
+        if constexpr (std::is_same_v<T, Return>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: return\n";
+            if (stmt.exp) {
+                out << ast_dump_detail::indent(indent + 2) << "exp:\n";
+                stmt.exp->Dump(out, indent + 4);
+                out << "\n";
+            }
+        }
+    },
+        payload);
+    out << ast_dump_detail::indent(indent) << "}";
+}
+
+void ExpAST::Dump(std::ostream& out, int indent) const
+{
+    out << ast_dump_detail::indent(indent) << "ExpAST {\n";
+    if (lor_exp) {
+        lor_exp->Dump(out, indent + 2);
+        out << "\n";
+    }
+    out << ast_dump_detail::indent(indent) << "}";
+}
+
+void LOrExpAST::Dump(std::ostream& out, int indent) const
+{
+    out << ast_dump_detail::indent(indent) << "LOrExpAST {\n";
+    std::visit([&](const auto& v) {
+        using T = std::decay_t<decltype(v)>;
+        if constexpr (std::is_same_v<T, Simple>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: land\n";
+            if (v.land_exp) {
+                v.land_exp->Dump(out, indent + 4);
+                out << "\n";
+            }
+        } else if constexpr (std::is_same_v<T, Binary>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: lor\n";
+            out << ast_dump_detail::indent(indent + 2) << "op: "
+                << ast_dump_detail::binary_op_to_cstr(v.op) << "\n";
+            if (v.lor_exp) {
+                out << ast_dump_detail::indent(indent + 2) << "lhs:\n";
+                v.lor_exp->Dump(out, indent + 4);
+                out << "\n";
+            }
+            if (v.land_exp) {
+                out << ast_dump_detail::indent(indent + 2) << "rhs:\n";
+                v.land_exp->Dump(out, indent + 4);
+                out << "\n";
+            }
+        }
+    },
+        payload);
+    out << ast_dump_detail::indent(indent) << "}";
+}
+
+void LAndExpAST::Dump(std::ostream& out, int indent) const
+{
+    out << ast_dump_detail::indent(indent) << "LAndExpAST {\n";
+    std::visit([&](const auto& v) {
+        using T = std::decay_t<decltype(v)>;
+        if constexpr (std::is_same_v<T, Simple>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: eq\n";
+            if (v.eq_exp) {
+                v.eq_exp->Dump(out, indent + 4);
+                out << "\n";
+            }
+        } else if constexpr (std::is_same_v<T, Binary>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: land\n";
+            out << ast_dump_detail::indent(indent + 2) << "op: "
+                << ast_dump_detail::binary_op_to_cstr(v.op) << "\n";
+            if (v.land_exp) {
+                out << ast_dump_detail::indent(indent + 2) << "lhs:\n";
+                v.land_exp->Dump(out, indent + 4);
+                out << "\n";
+            }
+            if (v.eq_exp) {
+                out << ast_dump_detail::indent(indent + 2) << "rhs:\n";
+                v.eq_exp->Dump(out, indent + 4);
+                out << "\n";
+            }
+        }
+    },
+        payload);
+    out << ast_dump_detail::indent(indent) << "}";
+}
+
+void EqExpAST::Dump(std::ostream& out, int indent) const
+{
+    out << ast_dump_detail::indent(indent) << "EqExpAST {\n";
+    std::visit([&](const auto& v) {
+        using T = std::decay_t<decltype(v)>;
+        if constexpr (std::is_same_v<T, Simple>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: rel\n";
+            if (v.rel_exp) {
+                v.rel_exp->Dump(out, indent + 4);
+                out << "\n";
+            }
+        } else if constexpr (std::is_same_v<T, Binary>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: eq\n";
+            out << ast_dump_detail::indent(indent + 2) << "op: "
+                << ast_dump_detail::binary_op_to_cstr(v.op) << "\n";
+            if (v.eq_exp) {
+                out << ast_dump_detail::indent(indent + 2) << "lhs:\n";
+                v.eq_exp->Dump(out, indent + 4);
+                out << "\n";
+            }
+            if (v.rel_exp) {
+                out << ast_dump_detail::indent(indent + 2) << "rhs:\n";
+                v.rel_exp->Dump(out, indent + 4);
+                out << "\n";
+            }
+        }
+    },
+        payload);
+    out << ast_dump_detail::indent(indent) << "}";
+}
+
+void RelExpAST::Dump(std::ostream& out, int indent) const
+{
+    out << ast_dump_detail::indent(indent) << "RelExpAST {\n";
+    std::visit([&](const auto& v) {
+        using T = std::decay_t<decltype(v)>;
+        if constexpr (std::is_same_v<T, Simple>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: add\n";
+            if (v.add_exp) {
+                v.add_exp->Dump(out, indent + 4);
+                out << "\n";
+            }
+        } else if constexpr (std::is_same_v<T, Binary>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: rel\n";
+            out << ast_dump_detail::indent(indent + 2) << "op: "
+                << ast_dump_detail::binary_op_to_cstr(v.op) << "\n";
+            if (v.rel_exp) {
+                out << ast_dump_detail::indent(indent + 2) << "lhs:\n";
+                v.rel_exp->Dump(out, indent + 4);
+                out << "\n";
+            }
+            if (v.add_exp) {
+                out << ast_dump_detail::indent(indent + 2) << "rhs:\n";
+                v.add_exp->Dump(out, indent + 4);
+                out << "\n";
+            }
+        }
+    },
+        payload);
+    out << ast_dump_detail::indent(indent) << "}";
+}
+
+void AddExpAST::Dump(std::ostream& out, int indent) const
+{
+    out << ast_dump_detail::indent(indent) << "AddExpAST {\n";
+    std::visit([&](const auto& v) {
+        using T = std::decay_t<decltype(v)>;
+        if constexpr (std::is_same_v<T, Simple>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: mul\n";
+            if (v.mul_exp) {
+                v.mul_exp->Dump(out, indent + 4);
+                out << "\n";
+            }
+        } else if constexpr (std::is_same_v<T, Binary>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: add\n";
+            out << ast_dump_detail::indent(indent + 2) << "op: "
+                << ast_dump_detail::binary_op_to_cstr(v.op) << "\n";
+            if (v.add_exp) {
+                out << ast_dump_detail::indent(indent + 2) << "lhs:\n";
+                v.add_exp->Dump(out, indent + 4);
+                out << "\n";
+            }
+            if (v.mul_exp) {
+                out << ast_dump_detail::indent(indent + 2) << "rhs:\n";
+                v.mul_exp->Dump(out, indent + 4);
+                out << "\n";
+            }
+        }
+    },
+        payload);
+    out << ast_dump_detail::indent(indent) << "}";
+}
+
+void MulExpAST::Dump(std::ostream& out, int indent) const
+{
+    out << ast_dump_detail::indent(indent) << "MulExpAST {\n";
+    std::visit([&](const auto& v) {
+        using T = std::decay_t<decltype(v)>;
+        if constexpr (std::is_same_v<T, Simple>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: unary\n";
+            if (v.unary_exp) {
+                v.unary_exp->Dump(out, indent + 4);
+                out << "\n";
+            }
+        } else if constexpr (std::is_same_v<T, Binary>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: mul\n";
+            out << ast_dump_detail::indent(indent + 2) << "op: "
+                << ast_dump_detail::binary_op_to_cstr(v.op) << "\n";
+            if (v.mul_exp) {
+                out << ast_dump_detail::indent(indent + 2) << "lhs:\n";
+                v.mul_exp->Dump(out, indent + 4);
+                out << "\n";
+            }
+            if (v.unary_exp) {
+                out << ast_dump_detail::indent(indent + 2) << "rhs:\n";
+                v.unary_exp->Dump(out, indent + 4);
+                out << "\n";
+            }
+        }
+    },
+        payload);
+    out << ast_dump_detail::indent(indent) << "}";
+}
+
+void UnaryExpAST::Dump(std::ostream& out, int indent) const
+{
+    out << ast_dump_detail::indent(indent) << "UnaryExpAST {\n";
+    std::visit([&](const auto& v) {
+        using T = std::decay_t<decltype(v)>;
+        if constexpr (std::is_same_v<T, Primary>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: primary\n";
+            if (v.exp) {
+                v.exp->Dump(out, indent + 4);
+                out << "\n";
+            }
+        } else if constexpr (std::is_same_v<T, Unary>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: unary\n";
+            out << ast_dump_detail::indent(indent + 2) << "op: "
+                << ast_dump_detail::unary_op_to_cstr(v.op) << "\n";
+            if (v.exp) {
+                v.exp->Dump(out, indent + 4);
+                out << "\n";
+            }
+        }
+    },
+        payload);
+    out << ast_dump_detail::indent(indent) << "}";
+}
+
+void PrimaryExpAST::Dump(std::ostream& out, int indent) const
+{
+    out << ast_dump_detail::indent(indent) << "PrimaryExpAST {\n";
+    std::visit([&](const auto& v) {
+        using T = std::decay_t<decltype(v)>;
+        if constexpr (std::is_same_v<T, Number>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: number\n";
+            out << ast_dump_detail::indent(indent + 2) << "value: " << v.value << "\n";
+        } else if constexpr (std::is_same_v<T, Expression>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: expression\n";
+            if (v.exp) {
+                v.exp->Dump(out, indent + 4);
+                out << "\n";
+            }
+        } else if constexpr (std::is_same_v<T, LValue>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: lvalue\n";
+            out << ast_dump_detail::indent(indent + 2) << "ident: " << v.ident << "\n";
+        }
+    },
+        payload);
+    out << ast_dump_detail::indent(indent) << "}";
+}
