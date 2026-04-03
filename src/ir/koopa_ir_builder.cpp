@@ -1,5 +1,5 @@
-#include "koopa_ir_builder.h"
-#include "koopa.h"
+#include "ir/koopa_ir_builder.h"
+#include "ir/koopa.h"
 
 namespace rewind_ir {
 // 这一部分只需要顺序遍历 koopa_ir 就可以得到 koopa_raw_program_t

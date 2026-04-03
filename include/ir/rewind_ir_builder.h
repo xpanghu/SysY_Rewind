@@ -1,4 +1,5 @@
 #include "rewind_ir.h"
+#include "symbol_table.h"
 #include "unordered_map"
 
 namespace rewind_ir {
@@ -24,17 +25,6 @@ private:
     IRValue* lower_unary_exp(const UnaryExpAST& ast, IRModule& module);
     IRValue* lower_primary_exp(const PrimaryExpAST& ast, IRModule& module);
 
-    /*
-     * 下面函数用于语义分析
-    */
-    // 作用域管理
-    void enter_scope();
-    void exit_scope();
-
-    // 常量定义和查询
-    void define_const(const std::string& name, int32_t value);
-    std::optional<int32_t> lookup_const(const std::string& name) const;
-
     // 常量表达式求值（不生成 IR，只返回 int32_t 值）
     int32_t eval_exp(const ExpAST& ast, IRModule& module);
     int32_t eval_lor_exp(const LOrExpAST& ast, IRModule& module);
@@ -46,7 +36,13 @@ private:
     int32_t eval_unary_exp(const UnaryExpAST& ast, IRModule& module);
     int32_t eval_primary_exp(const PrimaryExpAST& ast, IRModule& module);
 
-    // 符号表：作用域栈 + 常量映射
-    std::vector<std::unordered_map<std::string, int32_t>> const_scopes_;
+    // 常量获取或创建（带缓存）
+    IRValue* get_or_create_constant(int32_t value, IRModule& module);
+
+    // 符号表
+    SymbolTable symbol_table_;
+
+    // 常量缓存：值 -> IRConstant*
+    std::unordered_map<int32_t, IRConstant*> constant_cache_;
 };
 }

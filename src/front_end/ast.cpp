@@ -1,4 +1,4 @@
-#include "ast.h"
+#include "front_end/ast.h"
 
 namespace ast_dump_detail {
 

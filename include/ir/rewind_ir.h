@@ -184,8 +184,9 @@ public:
 protected:
     IRValue() = default;
 
-    explicit IRValue(IRValueKind k)
-        : kind(k)
+    explicit IRValue(IRValueKind k, const std::string& name = {})
+        : name(name)
+        , kind(k)
     {
     }
 };
@@ -215,8 +216,8 @@ public:
 private:
     IRConstant() = default;
 
-    explicit IRConstant(int value)
-        : IRValue(IRValueKind::IR_INTEGER)
+    explicit IRConstant(int value, const std::string& name = {})
+        : IRValue(IRValueKind::IR_INTEGER, name)
         , value_(value)
     {
     }
