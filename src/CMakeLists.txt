@@ -26,7 +26,7 @@ set(FRONTEND_SRCS
 set(IR_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/ir/symbol_table.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ir/rewind_ir_builder.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ir/koopa_ir_builder.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ir/rewind_ir_type.cpp
 )
 
 set(BACKEND_SRCS
@@ -49,17 +49,12 @@ add_executable(compiler
 )
 
 # 添加所有 include 目录到目标
-target_include_directories(compiler PRIVATE
+target_include_directories(compiler PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/front_end
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/ir
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/back_end
-    ${KOOPA_INCLUDE_DIR}
     ${CMAKE_CURRENT_BINARY_DIR}/front_end
 )
-
-# 链接 koopa 库
-target_link_directories(compiler PRIVATE ${KOOPA_LIB_DIR})
-target_link_libraries(compiler PRIVATE koopa)
 
 # 编译选项
 target_compile_options(compiler PRIVATE

@@ -1,375 +1,583 @@
-#include "back_end/riscv.h"
-
-#include <array>
-#include <deque>
-#include <iostream>
-#include <optional>
+#include "riscv.h"
+#include "rewind_ir.h"
+#include "rewind_ir_type.h"
+#include <cctype>
+#include <ostream>
+#include <stdexcept>
 #include <string>
-#include <string_view>
-#include <unordered_map>
 
-namespace riscv {
-namespace {
+namespace riscv
+{
 
-    class RawProgramEmitter {
-    public:
-        explicit RawProgramEmitter(std::ostream& out)
-            : out_(out)
-        {
-            reset_register_state();
-        }
+namespace
+{
 
-        void emit_program(const koopa_raw_program_t& program)
-        {
-            out_ << "  .text\n";
-            // 输出 program 中 func, 之后开始遍历 func
-            for (size_t i = 0; i < program.funcs.len; ++i) {
-                auto func = reinterpret_cast<koopa_raw_function_t>(program.funcs.buffer[i]);
-                out_ << "  .globl " << skip_first(func->name) << "\n";
-            }
-            visit_slice(program.funcs);
-        }
+constexpr int32_t kWordSize = 4;
 
-    private:
-        enum class Register {
-            x0, // 恒为0
-            t0,
-            t1,
-            t2,
-            t3,
-            t4,
-            t5,
-            t6,
-            a0,
-            a1, // 函数参数/返回值
-            a2,
-            a3,
-            a4,
-            a5,
-            a6,
-            a7,
-            kCount
-        };
-
-        // c++17 static constexpr可以在类中初始化
-        static constexpr std::array<const char*, static_cast<size_t>(Register::kCount)> kRegisterNames_ {
-            "x0",
-            "t0",
-            "t1",
-            "t2",
-            "t3",
-            "t4",
-            "t5",
-            "t6",
-            "a0",
-            "a1",
-            "a2",
-            "a3",
-            "a4",
-            "a5",
-            "a6",
-            "a7",
-        };
-
-        static constexpr const char* reg_name(Register reg)
-        {
-            const auto idx = static_cast<size_t>(reg);
-            assert(idx < kRegisterNames_.size());
-            return kRegisterNames_[idx];
-        }
-
-        void reset_register_state()
-        {
-            // free_regs_.clear();
-            free_regs_ = {
-                Register::t0,
-                Register::t1,
-                Register::t2,
-                Register::t3,
-                Register::t4,
-                Register::t5,
-                Register::t6,
-                Register::a2,
-                Register::a3,
-                Register::a4,
-                Register::a5,
-                Register::a6,
-                Register::a7
-            };
-            reg_map_.clear();
-        }
-
-        static std::string_view skip_first(std::string_view sv)
-        {
-            return sv.empty() ? sv : sv.substr(1);
-        }
-
-        void visit_slice(const koopa_raw_slice_t& slice)
-        {
-            for (size_t i = 0; i < slice.len; ++i) {
-                auto ptr = slice.buffer[i];
-                switch (slice.kind) {
-                case KOOPA_RSIK_FUNCTION:
-                    visit_function(reinterpret_cast<koopa_raw_function_t>(ptr));
-                    break;
-                case KOOPA_RSIK_BASIC_BLOCK:
-                    visit_basic_block(reinterpret_cast<koopa_raw_basic_block_t>(ptr));
-                    break;
-                case KOOPA_RSIK_VALUE:
-                    visit_value(reinterpret_cast<koopa_raw_value_t>(ptr));
-                    break;
-                default:
-                    throw std::runtime_error("unsupported koopa_raw_slice_item_kind in riscv emitter");
-                }
-            }
-        }
-
-        void visit_function(const koopa_raw_function_t& func)
-        {
-            reset_register_state();
-            out_ << skip_first(func->name) << ":\n";
-            visit_slice(func->bbs);
-        }
-
-        void visit_basic_block(const koopa_raw_basic_block_t& bb)
-        {
-            visit_slice(bb->insts);
-        }
-
-        void visit_value(const koopa_raw_value_t& value)
-        {
-            const auto& kind = value->kind;
-            switch (kind.tag) {
-            case KOOPA_RVT_RETURN:
-                visit_return(kind.data.ret);
-                break;
-            case KOOPA_RVT_BINARY:
-                visit_binary(value);
-                break;
-            default:
-                break;
-            }
-        }
-
-        // 返回已经被分配的寄存器
-        Register require_assigned_register(koopa_raw_value_t value)
-        {
-            auto it = reg_map_.find(value);
-            assert(it != reg_map_.end());
-            return it->second;
-        }
-
-        // 分配新的寄存器
-        Register assign_register_for_value(koopa_raw_value_t value)
-        {
-            // 判断寄存器数目是否为零
-            assert(!free_regs_.empty());
-            Register reg = free_regs_.front();
-            free_regs_.pop_front();
-            reg_map_[value] = reg;
-            return reg;
-        }
-
-        // 用于二元指令操作数分配
-        // 按 lhs->rhs 顺序检查并分配操作数寄存器。
-        // dst 复用本轮最后新分配的寄存器；若本轮无新分配则分配新寄存器。
-        Register ensure_operand_register(koopa_raw_value_t value, std::optional<Register>& last_new_reg)
-        {
-            const auto& kind = value->kind;
-            if (kind.tag == KOOPA_RVT_INTEGER) {
-                // 操作数为0, 返回特定寄存器 x0
-                if (kind.data.integer.value == 0) {
-                    return Register::x0;
-                }
-                Register reg = assign_register_for_value(value);
-                emit_li(reg, std::to_string(kind.data.integer.value));
-                last_new_reg = reg;
-                return reg;
-            }
-
-            return require_assigned_register(value);
-        }
-
-        void visit_binary(const koopa_raw_value_t& value)
-        {
-            const auto& binary = value->kind.data.binary;
-            std::optional<Register> last_new_reg;
-
-            Register lhs = ensure_operand_register(binary.lhs, last_new_reg);
-            Register rhs = ensure_operand_register(binary.rhs, last_new_reg);
-
-            Register dst;
-            if (last_new_reg.has_value()) {
-                dst = *last_new_reg;
-            } else {
-                dst = assign_register_for_value(value);
-            }
-
-            reg_map_[value] = dst;
-
-            switch (binary.op) {
-            case KOOPA_RBO_EQ: {
-                // lhs / rhs == 0 , 则只需要seqz一条指令
-                emit_xor(dst, lhs, rhs);
-                emit_seqz(dst, dst);
-                break;
-            }
-            case KOOPA_RBO_NOT_EQ: {
-                // lhs / rhs == 0 , 则只需要snez一条指令
-                emit_xor(dst, lhs, rhs);
-                emit_snez(dst, dst);
-                break;
-            }
-            case KOOPA_RBO_SUB: {
-                emit_sub(dst, lhs, rhs);
-                break;
-            }
-            case KOOPA_RBO_ADD: {
-                emit_add(dst, lhs, rhs);
-                break;
-            }
-            case KOOPA_RBO_AND: {
-                emit_and(dst, lhs, rhs);
-                break;
-            }
-            case KOOPA_RBO_OR: {
-                emit_or(dst, lhs, rhs);
-                break;
-            }
-            case KOOPA_RBO_MUL: {
-                emit_mul(dst, lhs, rhs);
-                break;
-            }
-            case KOOPA_RBO_DIV: {
-                emit_div(dst, lhs, rhs);
-                break;
-            }
-            case KOOPA_RBO_MOD: {
-                emit_rem(dst, lhs, rhs);
-                break;
-            }
-            case KOOPA_RBO_GT: {
-                emit_gt(dst, lhs, rhs);
-                break;
-            }
-            case KOOPA_RBO_LT: {
-                emit_lt(dst, lhs, rhs);
-                break;
-            }
-            case KOOPA_RBO_GE: {
-                // a >= b == !(a < b)
-                emit_lt(dst, lhs, rhs);
-                emit_seqz(dst, dst);
-                break;
-            }
-            case KOOPA_RBO_LE: {
-                // a <= b == !(a > b)
-                emit_gt(dst, lhs, rhs);
-                emit_seqz(dst, dst);
-                break;
-            }
-            default:
-                std::cout << "\n"
-                          << binary.op << std::endl;
-                throw std::runtime_error("unsupported koopa binary op in riscv emitter");
-            }
-        }
-
-        void visit_return(const koopa_raw_return_t& ret)
-        {
-            if (ret.value != nullptr) {
-                const auto& ret_kind = ret.value->kind;
-                if (ret_kind.tag == KOOPA_RVT_INTEGER) {
-                    emit_li(Register::a0, std::to_string(ret_kind.data.integer.value));
-                } else {
-                    Register src = require_assigned_register(ret.value);
-                    emit_mv(Register::a0, src);
-                }
-            }
-            out_ << "  ret\n";
-        }
-
-        void emit_li(Register rd, const std::string& imm)
-        {
-            out_ << "  li    " << reg_name(rd) << ", " << imm << "\n";
-        }
-
-        void emit_gt(Register rd, Register rs1, Register rs2)
-        {
-            out_ << "  sgt   " << reg_name(rd) << ", " << reg_name(rs1) << ", " << reg_name(rs2) << "\n";
-        }
-
-        void emit_lt(Register rd, Register rs1, Register rs2)
-        {
-            out_ << "  slt   " << reg_name(rd) << ", " << reg_name(rs1) << ", " << reg_name(rs2) << "\n";
-        }
-
-        void emit_xor(Register rd, Register rs1, Register rs2)
-        {
-            out_ << "  xor   " << reg_name(rd) << ", " << reg_name(rs1) << ", " << reg_name(rs2) << "\n";
-        }
-
-        void emit_seqz(Register rd, Register rs)
-        {
-            out_ << "  seqz  " << reg_name(rd) << ", " << reg_name(rs) << "\n";
-        }
-
-        void emit_snez(Register rd, Register rs)
-        {
-            out_ << "  snez  " << reg_name(rd) << ", " << reg_name(rs) << "\n";
-        }
-
-        void emit_sub(Register rd, Register rs1, Register rs2)
-        {
-            out_ << "  sub   " << reg_name(rd) << ", " << reg_name(rs1) << ", " << reg_name(rs2) << "\n";
-        }
-
-        void emit_add(Register rd, Register rs1, Register rs2)
-        {
-            out_ << "  add   " << reg_name(rd) << ", " << reg_name(rs1) << ", " << reg_name(rs2) << "\n";
-        }
-
-        void emit_and(Register rd, Register rs1, Register rs2)
-        {
-            out_ << "  and   " << reg_name(rd) << ", " << reg_name(rs1) << ", " << reg_name(rs2) << "\n";
-        }
-
-        void emit_or(Register rd, Register rs1, Register rs2)
-        {
-            out_ << "  or    " << reg_name(rd) << ", " << reg_name(rs1) << ", " << reg_name(rs2) << "\n";
-        }
-
-        void emit_mv(Register rd, Register rs)
-        {
-            out_ << "  mv    " << reg_name(rd) << ", " << reg_name(rs) << "\n";
-        }
-
-        void emit_mul(Register rd, Register rs1, Register rs2)
-        {
-            out_ << "  mul   " << reg_name(rd) << ", " << reg_name(rs1) << ", " << reg_name(rs2) << "\n";
-        }
-
-        void emit_div(Register rd, Register rs1, Register rs2)
-        {
-            out_ << "  div   " << reg_name(rd) << ", " << reg_name(rs1) << ", " << reg_name(rs2) << "\n";
-        }
-
-        void emit_rem(Register rd, Register rs1, Register rs2)
-        {
-            out_ << "  rem   " << reg_name(rd) << ", " << reg_name(rs1) << ", " << reg_name(rs2) << "\n";
-        }
-
-        std::ostream& out_; // 与hello.koopa绑定
-        std::deque<Register> free_regs_;
-        std::unordered_map<koopa_raw_value_t, Register> reg_map_;
-    };
+const int32_t* find_slot(const std::unordered_map<const rewind_ir::IRValue*, int32_t>& slots,
+                         const rewind_ir::IRValue* value)
+{
+    const auto it = slots.find(value);
+    if (it == slots.end()) {
+        return nullptr;
+    }
+    return &it->second;
+}
 
 } // namespace
 
-void emit_program(const koopa_raw_program_t& program, std::ostream& out)
+// check if the inst have return value
+bool FunctionFrame::produces_stack_value(const rewind_ir::IRValue& value)
 {
-    RawProgramEmitter emitter(out);
-    emitter.emit_program(program);
+    switch (value.kind_) {
+    case rewind_ir::IRValueKind::IR_BINARY:
+    case rewind_ir::IRValueKind::IR_LOAD:
+        return true;
+    default:
+        return false;
+    }
+}
+
+int32_t FunctionFrame::alloc_size(const rewind_ir::IRAllocInst& inst)
+{
+    if (inst.type_ == nullptr || !inst.type_->is_pointer()) {
+        return kWordSize;
+    }
+
+    const auto* pointer_type = inst.type_->as<rewind_ir::IRPointerType>();
+    auto size = rewind_ir::IRTypeContext::instance().getTypeSize(pointer_type->base_type);
+    return static_cast<int32_t>(size == 0 ? kWordSize : size);
+}
+
+int32_t FunctionFrame::align_to(int32_t value, int32_t align)
+{
+    return ((value + align - 1) / align) * align;
+}
+
+/*
+ | previous function stack frame |     high address
+ | ----------------------------- |
+ |       saved registers         |
+ |       local variables         |
+ |       function params         | <-- sp register address
+ | ----------------------------- |     low address
+ * the design of stack frame
+ * 1. low address part stores function param slots
+ * 2. then stores local variable object slots and IR median slots
+ * 3. align 16 bytes
+ * return address is currently stored in ra
+ * improve: return address store in stack frame
+ */
+void FunctionFrame::build(const rewind_ir::IRFunction& func)
+{
+    next_slot_offset_ = 0;
+    frame_size_ = 16;
+    // ra_offset_ = 12;
+    object_slots_.clear();
+    value_slots_.clear();
+
+    for (const auto* block : func.basic_blocks_) {
+        for (const auto* inst : block->insts_) {
+            if (inst->kind_ == rewind_ir::IRValueKind::IR_ALLOC) {
+                const auto* alloc = inst->as<rewind_ir::IRAllocInst>();
+                object_slots_.emplace(inst, next_slot_offset_);
+                next_slot_offset_ += alloc_size(*alloc);
+                continue;
+            }
+            if (produces_stack_value(*inst)) {
+                value_slots_.emplace(inst, next_slot_offset_);
+                next_slot_offset_ += kWordSize;
+            }
+        }
+    }
+
+    frame_size_ = align_to(next_slot_offset_, 16);
+    // ra_offset_ = frame_size_ - kWordSize;
+}
+
+bool FunctionFrame::has_object_slot(const rewind_ir::IRValue* value) const
+{
+    return find_slot(object_slots_, value) != nullptr;
+}
+
+bool FunctionFrame::has_value_slot(const rewind_ir::IRValue* value) const
+{
+    return find_slot(value_slots_, value) != nullptr;
+}
+
+int32_t FunctionFrame::object_slot(const rewind_ir::IRValue* value) const
+{
+    if (const auto* slot = find_slot(object_slots_, value)) {
+        return *slot;
+    }
+    throw std::runtime_error("missing object slot");
+}
+
+int32_t FunctionFrame::value_slot(const rewind_ir::IRValue* value) const
+{
+    if (const auto* slot = find_slot(value_slots_, value)) {
+        return *slot;
+    }
+    throw std::runtime_error("missing value slot");
+}
+
+IREmitter::IREmitter(std::ostream& out) : out_(out)
+{
+}
+
+// imm12 scope [-2048, 2047]
+// check value is in scope
+bool IREmitter::fits_i12(int32_t value)
+{
+    return value >= -2048 && value <= 2047;
+}
+
+const char* IREmitter::reg_name(Register reg)
+{
+    switch (reg) {
+    case Register::x0:
+        return "x0";
+    case Register::ra:
+        return "ra";
+    case Register::sp:
+        return "sp";
+    case Register::t0:
+        return "t0";
+    case Register::t1:
+        return "t1";
+    case Register::t2:
+        return "t2";
+    case Register::a0:
+        return "a0";
+    }
+    throw std::runtime_error("unknown register");
+}
+
+/*
+ * from @name to name
+ * exmple: @abc-1 -> abc_1
+ */
+std::string IREmitter::sanitize_symbol(std::string_view name)
+{
+    if (!name.empty() && (name.front() == '@' || name.front() == '%')) {
+        name.remove_prefix(1);
+    }
+
+    std::string out;
+    out.reserve(name.size());
+    for (char ch : name) {
+        const unsigned char uch = static_cast<unsigned char>(ch);
+        // riscv name only allows letters and numbers
+        if (std::isalnum(uch) || ch == '_' || ch == '.') {
+            out.push_back(ch);
+        } else {
+            out.push_back('_');
+        }
+    }
+
+    if (out.empty()) {
+        out = "_anon";
+    }
+    return out;
+}
+
+void IREmitter::emit_module(const rewind_ir::IRModule& module)
+{
+    if (!module.global_values_.empty()) {
+        throw std::runtime_error("RISC-V backend does not support global values in this subset");
+    }
+
+    out_ << "  .text\n";
+    for (const auto* func : module.funcs_) {
+        out_ << "  .globl " << sanitize_symbol(func->name_) << "\n";
+    }
+    out_ << "\n";
+
+    for (const auto* func : module.funcs_) {
+        emit_function(*func);
+    }
+}
+
+void IREmitter::emit_function(const rewind_ir::IRFunction& func)
+{
+    current_function_ = &func;
+    frame_.build(func);
+
+    out_ << sanitize_symbol(func.name_) << ":\n";
+    emit_prologue();
+
+    for (const auto* block : func.basic_blocks_) {
+        emit_basic_block(*block);
+    }
+
+    out_ << "\n";
+}
+
+void IREmitter::emit_basic_block(const rewind_ir::IRBasicBlock& block)
+{
+    // ? dont't need to print block name
+    // if (current_function_ != nullptr && !current_function_->basic_blocks_.empty() && current_function_->basic_blocks_.front() != &block) {
+    // out_ << "." << sanitize_symbol(current_function_->name_) << "_"
+    //<< sanitize_symbol(block.name_) << ":\n";
+    //}
+
+    for (const auto* inst : block.insts_) {
+        emit_instruction(*inst);
+    }
+}
+
+void IREmitter::emit_instruction(const rewind_ir::IRValue& inst)
+{
+    switch (inst.kind_) {
+    case rewind_ir::IRValueKind::IR_ALLOC:
+        emit_alloc(*inst.as<rewind_ir::IRAllocInst>());
+        return;
+    case rewind_ir::IRValueKind::IR_STORE:
+        emit_store(*inst.as<rewind_ir::IRStoreInst>());
+        return;
+    case rewind_ir::IRValueKind::IR_LOAD:
+        emit_load(*inst.as<rewind_ir::IRLoadInst>());
+        return;
+    case rewind_ir::IRValueKind::IR_BINARY:
+        emit_binary(*inst.as<rewind_ir::IRBinaryInst>());
+        return;
+    case rewind_ir::IRValueKind::IR_RETURN:
+        emit_return(*inst.as<rewind_ir::IRReturnInst>());
+        return;
+    case rewind_ir::IRValueKind::IR_INTEGER:
+        return;
+    default:
+        break;
+    }
+
+    throw std::runtime_error("unsupported rewind IR instruction in RISC-V backend: " + inst.name_);
+}
+
+void IREmitter::emit_alloc(const rewind_ir::IRAllocInst& inst)
+{
+    (void)inst;
+}
+
+void IREmitter::materialize_value(const rewind_ir::IRValue* value, Register dst)
+{
+    if (value == nullptr) {
+        emit_li(dst, 0);
+        return;
+    }
+
+    if (value->kind_ == rewind_ir::IRValueKind::IR_INTEGER) {
+        emit_li(dst, value->as<rewind_ir::IRConstant>()->value_);
+        return;
+    }
+
+    if (frame_.has_value_slot(value)) {
+        emit_stack_load(dst, frame_.value_slot(value));
+        return;
+    }
+
+    if (frame_.has_object_slot(value)) {
+        emit_stack_address(dst, frame_.object_slot(value));
+        return;
+    }
+
+    throw std::runtime_error("cannot materialize IR value: " + value->name_);
+}
+
+void IREmitter::materialize_pointer(const rewind_ir::IRValue* value, Register dst)
+{
+    if (value == nullptr) {
+        throw std::runtime_error("null pointer operand");
+    }
+
+    if (frame_.has_object_slot(value)) {
+        emit_stack_address(dst, frame_.object_slot(value));
+        return;
+    }
+
+    if (frame_.has_value_slot(value)) {
+        emit_stack_load(dst, frame_.value_slot(value));
+        return;
+    }
+
+    throw std::runtime_error("cannot materialize pointer value: " + value->name_);
+}
+
+void IREmitter::spill_value(const rewind_ir::IRValue* value, Register src)
+{
+    if (!frame_.has_value_slot(value)) {
+        throw std::runtime_error("missing spill slot for IR value: " + value->name_);
+    }
+    emit_stack_store(src, frame_.value_slot(value));
+}
+
+void IREmitter::emit_store(const rewind_ir::IRStoreInst& inst)
+{
+    materialize_value(inst.value_, Register::t0);
+
+    if (frame_.has_object_slot(inst.dest_)) {
+        emit_stack_store(Register::t0, frame_.object_slot(inst.dest_));
+        return;
+    }
+
+    materialize_pointer(inst.dest_, Register::t1);
+    emit_sw(Register::t0, Register::t1, 0);
+}
+
+void IREmitter::emit_load(const rewind_ir::IRLoadInst& inst)
+{
+    if (frame_.has_object_slot(inst.src_)) {
+        emit_stack_load(Register::t0, frame_.object_slot(inst.src_));
+    } else {
+        materialize_pointer(inst.src_, Register::t1);
+        emit_lw(Register::t0, Register::t1, 0);
+    }
+
+    spill_value(&inst, Register::t0);
+}
+
+void IREmitter::emit_binary(const rewind_ir::IRBinaryInst& inst)
+{
+    materialize_value(inst.lhs_, Register::t0);
+    materialize_value(inst.rhs_, Register::t1);
+
+    switch (inst.op_) {
+    case rewind_ir::IRBinaryOp::ADD:
+        emit_add(Register::t0, Register::t0, Register::t1);
+        break;
+    case rewind_ir::IRBinaryOp::SUB:
+        emit_sub(Register::t0, Register::t0, Register::t1);
+        break;
+    case rewind_ir::IRBinaryOp::MUL:
+        emit_mul(Register::t0, Register::t0, Register::t1);
+        break;
+    case rewind_ir::IRBinaryOp::DIV:
+        emit_div(Register::t0, Register::t0, Register::t1);
+        break;
+    case rewind_ir::IRBinaryOp::MOD:
+        emit_rem(Register::t0, Register::t0, Register::t1);
+        break;
+    case rewind_ir::IRBinaryOp::AND:
+        emit_and(Register::t0, Register::t0, Register::t1);
+        break;
+    case rewind_ir::IRBinaryOp::OR:
+        emit_or(Register::t0, Register::t0, Register::t1);
+        break;
+    case rewind_ir::IRBinaryOp::XOR:
+        emit_xor(Register::t0, Register::t0, Register::t1);
+        break;
+    case rewind_ir::IRBinaryOp::EQ:
+        emit_xor(Register::t0, Register::t0, Register::t1);
+        emit_seqz(Register::t0, Register::t0);
+        break;
+    case rewind_ir::IRBinaryOp::NEQ:
+        emit_xor(Register::t0, Register::t0, Register::t1);
+        emit_snez(Register::t0, Register::t0);
+        break;
+    case rewind_ir::IRBinaryOp::LT:
+        emit_slt(Register::t0, Register::t0, Register::t1);
+        break;
+    case rewind_ir::IRBinaryOp::GT:
+        emit_slt(Register::t0, Register::t1, Register::t0);
+        break;
+    case rewind_ir::IRBinaryOp::LE:
+        emit_slt(Register::t0, Register::t1, Register::t0);
+        emit_seqz(Register::t0, Register::t0);
+        break;
+    case rewind_ir::IRBinaryOp::GE:
+        emit_slt(Register::t0, Register::t0, Register::t1);
+        emit_seqz(Register::t0, Register::t0);
+        break;
+    case rewind_ir::IRBinaryOp::SHL:
+        out_ << "  sll " << reg_name(Register::t0) << ", " << reg_name(Register::t0)
+             << ", " << reg_name(Register::t1) << "\n";
+        break;
+    case rewind_ir::IRBinaryOp::SHR:
+        out_ << "  srl " << reg_name(Register::t0) << ", " << reg_name(Register::t0)
+             << ", " << reg_name(Register::t1) << "\n";
+        break;
+    case rewind_ir::IRBinaryOp::SAR:
+        out_ << "  sra " << reg_name(Register::t0) << ", " << reg_name(Register::t0)
+             << ", " << reg_name(Register::t1) << "\n";
+        break;
+    }
+
+    spill_value(&inst, Register::t0);
+}
+
+void IREmitter::emit_return(const rewind_ir::IRReturnInst& inst)
+{
+    materialize_value(inst.dst_, Register::a0);
+    emit_epilogue();
+    emit_ret();
+}
+
+//
+void IREmitter::emit_prologue()
+{
+    emit_adjust_sp(-frame_.frame_size());
+    // emit_stack_store(Register::ra, frame_.ra_offset());
+}
+
+// restore sp register
+void IREmitter::emit_epilogue()
+{
+    // emit_stack_load(Register::ra, frame_.ra_offset());
+    emit_adjust_sp(frame_.frame_size());
+}
+
+// adjust sp
+// sp add frame_size
+// sp sub frame_size
+void IREmitter::emit_adjust_sp(int32_t delta)
+{
+    // check immediate number is in [-2048, 2047]
+    if (fits_i12(delta)) {
+        emit_addi(Register::sp, Register::sp, delta);
+        return;
+    }
+
+    emit_li(Register::t0, delta);
+    emit_add(Register::sp, Register::sp, Register::t0);
+}
+
+void IREmitter::emit_stack_address(Register rd, int32_t offset)
+{
+    if (fits_i12(offset)) {
+        emit_addi(rd, Register::sp, offset);
+        return;
+    }
+
+    emit_li(Register::t2, offset);
+    emit_add(rd, Register::sp, Register::t2);
+}
+
+void IREmitter::emit_stack_load(Register rd, int32_t offset, Register scratch)
+{
+    if (fits_i12(offset)) {
+        emit_lw(rd, Register::sp, offset);
+        return;
+    }
+
+    emit_stack_address(scratch, offset);
+    emit_lw(rd, scratch, 0);
+}
+
+void IREmitter::emit_stack_store(Register rs, int32_t offset, Register scratch)
+{
+    if (fits_i12(offset)) {
+        emit_sw(rs, Register::sp, offset);
+        return;
+    }
+
+    if (scratch == rs) {
+        throw std::runtime_error("stack store scratch register conflicts with source register");
+    }
+
+    emit_stack_address(scratch, offset);
+    emit_sw(rs, scratch, 0);
+}
+
+void IREmitter::emit_li(Register rd, int32_t imm)
+{
+    out_ << "  li " << reg_name(rd) << ", " << imm << "\n";
+}
+
+void IREmitter::emit_mv(Register rd, Register rs)
+{
+    out_ << "  mv " << reg_name(rd) << ", " << reg_name(rs) << "\n";
+}
+
+void IREmitter::emit_add(Register rd, Register rs1, Register rs2)
+{
+    out_ << "  add " << reg_name(rd) << ", " << reg_name(rs1)
+         << ", " << reg_name(rs2) << "\n";
+}
+
+void IREmitter::emit_addi(Register rd, Register rs1, int32_t imm)
+{
+    out_ << "  addi " << reg_name(rd) << ", " << reg_name(rs1)
+         << ", " << imm << "\n";
+}
+
+void IREmitter::emit_sub(Register rd, Register rs1, Register rs2)
+{
+    out_ << "  sub " << reg_name(rd) << ", " << reg_name(rs1)
+         << ", " << reg_name(rs2) << "\n";
+}
+
+void IREmitter::emit_mul(Register rd, Register rs1, Register rs2)
+{
+    out_ << "  mul " << reg_name(rd) << ", " << reg_name(rs1)
+         << ", " << reg_name(rs2) << "\n";
+}
+
+void IREmitter::emit_div(Register rd, Register rs1, Register rs2)
+{
+    out_ << "  div " << reg_name(rd) << ", " << reg_name(rs1)
+         << ", " << reg_name(rs2) << "\n";
+}
+
+void IREmitter::emit_rem(Register rd, Register rs1, Register rs2)
+{
+    out_ << "  rem " << reg_name(rd) << ", " << reg_name(rs1)
+         << ", " << reg_name(rs2) << "\n";
+}
+
+void IREmitter::emit_and(Register rd, Register rs1, Register rs2)
+{
+    out_ << "  and " << reg_name(rd) << ", " << reg_name(rs1)
+         << ", " << reg_name(rs2) << "\n";
+}
+
+void IREmitter::emit_or(Register rd, Register rs1, Register rs2)
+{
+    out_ << "  or " << reg_name(rd) << ", " << reg_name(rs1)
+         << ", " << reg_name(rs2) << "\n";
+}
+
+void IREmitter::emit_xor(Register rd, Register rs1, Register rs2)
+{
+    out_ << "  xor " << reg_name(rd) << ", " << reg_name(rs1)
+         << ", " << reg_name(rs2) << "\n";
+}
+
+void IREmitter::emit_slt(Register rd, Register rs1, Register rs2)
+{
+    out_ << "  slt " << reg_name(rd) << ", " << reg_name(rs1)
+         << ", " << reg_name(rs2) << "\n";
+}
+
+void IREmitter::emit_seqz(Register rd, Register rs)
+{
+    out_ << "  seqz " << reg_name(rd) << ", " << reg_name(rs) << "\n";
+}
+
+void IREmitter::emit_snez(Register rd, Register rs)
+{
+    out_ << "  snez " << reg_name(rd) << ", " << reg_name(rs) << "\n";
+}
+
+void IREmitter::emit_lw(Register rd, Register rs1, int32_t offset)
+{
+    out_ << "  lw " << reg_name(rd) << ", " << offset
+         << "(" << reg_name(rs1) << ")\n";
+}
+
+void IREmitter::emit_sw(Register rs2, Register rs1, int32_t offset)
+{
+    out_ << "  sw " << reg_name(rs2) << ", " << offset
+         << "(" << reg_name(rs1) << ")\n";
+}
+
+void IREmitter::emit_ret()
+{
+    out_ << "  ret\n";
+}
+
+void emit_module(const rewind_ir::IRModule& module, std::ostream& out)
+{
+    IREmitter emitter(out);
+    emitter.emit_module(module);
 }
 
 } // namespace riscv

@@ -30,7 +30,6 @@ using namespace std;
 } <ast_list>
 
 // lexer 返回的所有 token 种类的声明
-// 注意 IDENT 和 INT_CONST 会返回 token 的值, 分别对应 str_val 和 int_val
 %token INT RETURN CONST
 %token <str_val> IDENT
 %token ADD SUB BANG MUL DIV MOD EQ NEQ GT LT GE LE AND OR
@@ -38,8 +37,8 @@ using namespace std;
 
 // 非终结符的类型定义
 %type <ast_val> FuncDef FuncType Block Stmt Exp PrimaryExp UnaryExp AddExp MulExp LOrExp RelExp EqExp LAndExp
-%type <ast_val> Decl ConstDecl ConstDef ConstInitVal BlockItem ConstExp 
-%type <ast_list> ConstDefList BlockItemList
+%type <ast_val> Decl ConstDecl ConstDef ConstInitVal BlockItem ConstExp VarDecl VarDef InitVal
+%type <ast_list> ConstDefList BlockItemList VarDefList
 %type <int_val> Number
 %type <unary_op> UnaryOp
 %type <binary_op> AddOp MulOp RelOp EqOp
@@ -74,7 +73,12 @@ FuncType
 Decl
     : ConstDecl {
         auto ast = new DeclAST();
-        ast->const_decl = unique_ptr<BaseAST>($1); 
+        ast->const_or_var = unique_ptr<BaseAST>($1); 
+        $$ = ast;
+    }
+    | VarDecl {
+        auto ast = new DeclAST();
+        ast->const_or_var = unique_ptr<BaseAST>($1);
         $$ = ast;
     }
     ;
@@ -125,12 +129,57 @@ ConstExp
     }
     ;
 
+VarDecl
+    : INT VarDefList ';' {
+        auto ast = new VarDeclAST();
+        ast->type = BType::INT;
+        ast->var_defs = std::move(*($2));
+        $$ = ast;
+    }
+    ;
+
+VarDefList
+    : VarDef {
+        auto var_def_list = new vector<unique_ptr<BaseAST>>();
+        var_def_list->push_back(unique_ptr<BaseAST>($1));
+        $$ = var_def_list;
+    }
+    | VarDefList ',' VarDef {
+        auto var_def_list = $1;
+        var_def_list->push_back(unique_ptr<BaseAST>($3));
+        $$ = var_def_list;
+    }
+    ;
+
+VarDef
+    : IDENT {
+        auto ast = new VarDefAST();
+        ast->payload = VarDefAST::DefEmpty{ *unique_ptr<string>{$1} };
+        $$ = ast;
+    }
+    | IDENT '=' InitVal {
+        auto ast = new VarDefAST();
+        ast->payload = VarDefAST::DefValue{
+            *unique_ptr<string>($1),
+            unique_ptr<BaseAST>($3)
+        };
+        $$ = ast;
+    }
+    ;
+
+InitVal 
+    : Exp {
+        auto ast = new InitValAST();
+        ast->exp = unique_ptr<BaseAST>($1);
+        $$ = ast;
+    }
+    ;
+
 Block
     : '{' BlockItemList '}' {
         auto ast = new BlockAST();
         ast->items = std::move(*($2)); 
         delete $2;
-        // ast->stmt = unique_ptr<BaseAST>($2);
         $$ = ast;
     }
     ;
@@ -159,6 +208,15 @@ Stmt
     : RETURN Exp ';' {
         auto ast = new StmtAST();
         ast->payload = StmtAST::Return { unique_ptr<BaseAST>($2) };
+        $$ = ast;
+    }
+    | IDENT '=' Exp ';'
+    {
+        auto ast = new StmtAST();
+        ast->payload = StmtAST::Assign {
+            *unique_ptr<string>($1),
+            unique_ptr<BaseAST>($3) 
+        };
         $$ = ast;
     }
     ;

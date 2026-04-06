@@ -5,10 +5,31 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+#include <variant>
 
-namespace rewind_ir {
+namespace rewind_ir
+{
 
-class SymbolTable {
+class IRValue;
+
+class SymbolTable
+{
+private:
+    // 常量
+    struct Const {
+        int32_t value;
+    };
+
+    // 变量
+    struct Var {
+        IRValue* alloc; // alloc instruction pointer
+    };
+
+    using Payload = std::variant<Const, Var>;
+
+    // 作用域栈 + 常量or变量的映射
+    std::vector<std::unordered_map<std::string, Payload>> scopes_;
+
 public:
     SymbolTable() = default;
 
@@ -18,15 +39,11 @@ public:
     // 退出当前作用域
     void exit_scope();
 
-    // 定义常量
     void define_const(const std::string& name, int32_t value);
 
-    // 查询常量
-    std::optional<int32_t> lookup_const(const std::string& name) const;
+    std::optional<std::variant<int32_t, IRValue*>> lookup(const std::string& name) const;
 
-private:
-    // 作用域栈 + 常量映射
-    std::vector<std::unordered_map<std::string, int32_t>> const_scopes_;
+    void define_var(const std::string& name, IRValue* alloc);
 };
 
 } // namespace rewind_ir

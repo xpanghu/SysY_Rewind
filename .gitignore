@@ -1,5 +1,6 @@
-cmake-build/
-*.koopa
-hello.c
+build/
+debug/
+tests/
 .vscode/
 .clangd
+scripts/

@@ -1,4 +1,4 @@
-#include "front_end/ast.h"
+#include "ast.h"
 
 namespace ast_dump_detail {
 
@@ -110,8 +110,8 @@ void FuncTypeAST::Dump(std::ostream& out, int indent) const
 void DeclAST::Dump(std::ostream& out, int indent) const
 {
     out << ast_dump_detail::indent(indent) << "DeclAST {\n";
-    if (const_decl) {
-        const_decl->Dump(out, indent + 2);
+    if (const_or_var) {
+        const_or_var->Dump(out, indent + 2);
         out << "\n";
     }
     out << ast_dump_detail::indent(indent) << "}";
@@ -155,6 +155,50 @@ void ConstInitValAST::Dump(std::ostream& out, int indent) const
     out << ast_dump_detail::indent(indent) << "}";
 }
 
+void VarDeclAST::Dump(std::ostream& out, int indent) const
+{
+    out << ast_dump_detail::indent(indent) << "VarDeclAST {\n";
+    out << ast_dump_detail::indent(indent + 2) << "type: " << ast_dump_detail::btype_to_cstr(type) << "\n";
+    out << ast_dump_detail::indent(indent + 2) << "var_defs: [\n";
+    for (const auto& def : var_defs) {
+        if (def) {
+            def->Dump(out, indent + 4);
+            out << "\n";
+        }
+    }
+    out << ast_dump_detail::indent(indent + 2) << "]\n";
+    out << ast_dump_detail::indent(indent) << "}";
+}
+
+void VarDefAST::Dump(std::ostream& out, int indent) const
+{
+    out << ast_dump_detail::indent(indent) << "VarDefAST {\n";
+    std::visit([&](const auto& v) {
+        using T = std::decay_t<decltype(v)>;
+        if constexpr (std::is_same_v<T, DefEmpty>) {
+            out << ast_dump_detail::indent(indent + 2) << "ident: " << v.ident << "\n";
+        } else if constexpr (std::is_same_v<T, DefValue>) {
+            out << ast_dump_detail::indent(indent + 2) << "ident: " << v.ident << "\n";
+            if (v.init_val) {
+                out << ast_dump_detail::indent(indent + 2) << "init_val:\n";
+                v.init_val->Dump(out, indent + 4);
+                out << "\n";
+            }
+        }
+    }, payload);
+    out << ast_dump_detail::indent(indent) << "}";
+}
+
+void InitValAST::Dump(std::ostream& out, int indent) const
+{
+    out << ast_dump_detail::indent(indent) << "InitValAST {\n";
+    if (exp) {
+        exp->Dump(out, indent + 2);
+        out << "\n";
+    }
+    out << ast_dump_detail::indent(indent) << "}";
+}
+
 void BlockAST::Dump(std::ostream& out, int indent) const
 {
     out << ast_dump_detail::indent(indent) << "BlockAST {\n";
@@ -174,6 +218,14 @@ void StmtAST::Dump(std::ostream& out, int indent) const
         using T = std::decay_t<decltype(stmt)>;
         if constexpr (std::is_same_v<T, Return>) {
             out << ast_dump_detail::indent(indent + 2) << "kind: return\n";
+            if (stmt.exp) {
+                out << ast_dump_detail::indent(indent + 2) << "exp:\n";
+                stmt.exp->Dump(out, indent + 4);
+                out << "\n";
+            }
+        } else if constexpr (std::is_same_v<T, Assign>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: assign\n";
+            out << ast_dump_detail::indent(indent + 2) << "lval: " << stmt.LVal << "\n";
             if (stmt.exp) {
                 out << ast_dump_detail::indent(indent + 2) << "exp:\n";
                 stmt.exp->Dump(out, indent + 4);

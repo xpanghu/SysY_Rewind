@@ -33,7 +33,8 @@ enum class BType {
     INT
 };
 
-namespace ast_dump_detail {
+namespace ast_dump_detail
+{
 
 struct IndentToken {
     int n;
@@ -69,7 +70,8 @@ class ConstDefAST;
 class ConstInitValAST;
 
 // 所有 AST 的基类
-class BaseAST {
+class BaseAST
+{
 public:
     virtual ~BaseAST() = default;
 
@@ -77,7 +79,8 @@ public:
 };
 
 // CompUnitAST
-class CompUnitAST : public BaseAST {
+class CompUnitAST : public BaseAST
+{
 public:
     std::unique_ptr<BaseAST> func_def;
 
@@ -85,7 +88,8 @@ public:
 };
 
 // FuncDefAST
-class FuncDefAST : public BaseAST {
+class FuncDefAST : public BaseAST
+{
 public:
     std::unique_ptr<BaseAST> func_type;
     std::string ident;
@@ -95,23 +99,35 @@ public:
 };
 
 // FuncTypeAST
-class FuncTypeAST : public BaseAST {
+class FuncTypeAST : public BaseAST
+{
 public:
     std::string type;
 
     void Dump(std::ostream& out, int indent = 0) const override;
 };
 
-// DeclAST
-class DeclAST : public BaseAST {
+// BlockAST
+class BlockAST : public BaseAST
+{
 public:
-    std::unique_ptr<BaseAST> const_decl;
+    std::vector<std::unique_ptr<BaseAST>> items;
+
+    void Dump(std::ostream& out, int indent = 0) const override;
+};
+
+// DeclAST
+class DeclAST : public BaseAST
+{
+public:
+    std::unique_ptr<BaseAST> const_or_var;
 
     void Dump(std::ostream& out, int indent = 0) const override;
 };
 
 // ConstDeclAST
-class ConstDeclAST : public BaseAST {
+class ConstDeclAST : public BaseAST
+{
 public:
     BType type = BType::INT;
     std::vector<std::unique_ptr<BaseAST>> const_defs;
@@ -120,7 +136,8 @@ public:
 };
 
 // ConstDefAST
-class ConstDefAST : public BaseAST {
+class ConstDefAST : public BaseAST
+{
 public:
     std::string ident;
     std::unique_ptr<BaseAST> const_init_val;
@@ -129,7 +146,8 @@ public:
 };
 
 // ConstInitValAST
-class ConstInitValAST : public BaseAST {
+class ConstInitValAST : public BaseAST
+{
 public:
     // 注意：AST中没有给出ConstExpAST类，const_exp实际类型就是ExpAST
     std::unique_ptr<BaseAST> const_exp;
@@ -137,29 +155,66 @@ public:
     void Dump(std::ostream& out, int indent = 0) const override;
 };
 
-// BlockAST
-class BlockAST : public BaseAST {
+// VarDecl
+class VarDeclAST : public BaseAST
+{
 public:
-    std::vector<std::unique_ptr<BaseAST>> items;
+    BType type = BType::INT;
+    std::vector<std::unique_ptr<BaseAST>> var_defs;
 
     void Dump(std::ostream& out, int indent = 0) const override;
 };
 
-// StmtAST - 使用 variant 替代 kind 字段
-class StmtAST : public BaseAST {
+// VarDef
+class VarDefAST : public BaseAST
+{
 public:
+    struct DefEmpty {
+        std::string ident;
+    };
+
+    struct DefValue {
+        std::string ident;
+        std::unique_ptr<BaseAST> init_val;
+    };
+
+    using Payload = std::variant<DefEmpty, DefValue>;
+    Payload payload;
+
+    void Dump(std::ostream& out, int ident = 0) const override;
+};
+
+// InitVal
+class InitValAST : public BaseAST
+{
+public:
+    std::unique_ptr<BaseAST> exp;
+
+    void Dump(std::ostream& out, int ident = 0) const override;
+};
+
+// StmtAST
+class StmtAST : public BaseAST
+{
+public:
+    struct Assign {
+        std::string LVal;
+        std::unique_ptr<BaseAST> exp;
+    };
+
     struct Return {
         std::unique_ptr<BaseAST> exp;
     };
 
-    using Payload = std::variant<Return>;
+    using Payload = std::variant<Return, Assign>;
     Payload payload;
 
     void Dump(std::ostream& out, int indent = 0) const override;
 };
 
 // ExpAST
-class ExpAST : public BaseAST {
+class ExpAST : public BaseAST
+{
 public:
     std::unique_ptr<BaseAST> lor_exp;
 
@@ -167,7 +222,8 @@ public:
 };
 
 // LOrExpAST - 使用 variant 替代 epk 字段
-class LOrExpAST : public BaseAST {
+class LOrExpAST : public BaseAST
+{
 public:
     struct Simple {
         std::unique_ptr<BaseAST> land_exp;
@@ -185,7 +241,8 @@ public:
 };
 
 // LAndExpAST - 使用 variant 替代 epk 字段
-class LAndExpAST : public BaseAST {
+class LAndExpAST : public BaseAST
+{
 public:
     struct Simple {
         std::unique_ptr<BaseAST> eq_exp;
@@ -203,7 +260,8 @@ public:
 };
 
 // EqExpAST - 使用 variant 替代 epk 字段
-class EqExpAST : public BaseAST {
+class EqExpAST : public BaseAST
+{
 public:
     struct Simple {
         std::unique_ptr<BaseAST> rel_exp;
@@ -221,7 +279,8 @@ public:
 };
 
 // RelExpAST - 使用 variant 替代 epk 字段
-class RelExpAST : public BaseAST {
+class RelExpAST : public BaseAST
+{
 public:
     struct Simple {
         std::unique_ptr<BaseAST> add_exp;
@@ -239,7 +298,8 @@ public:
 };
 
 // AddExpAST - 使用 variant 替代 epk 字段
-class AddExpAST : public BaseAST {
+class AddExpAST : public BaseAST
+{
 public:
     struct Simple {
         std::unique_ptr<BaseAST> mul_exp;
@@ -257,7 +317,8 @@ public:
 };
 
 // MulExpAST - 使用 variant 替代 epk 字段
-class MulExpAST : public BaseAST {
+class MulExpAST : public BaseAST
+{
 public:
     struct Simple {
         std::unique_ptr<BaseAST> unary_exp;
@@ -275,7 +336,8 @@ public:
 };
 
 // UnaryExpAST
-class UnaryExpAST : public BaseAST {
+class UnaryExpAST : public BaseAST
+{
 public:
     struct Primary {
         std::unique_ptr<BaseAST> exp;
@@ -292,7 +354,8 @@ public:
 };
 
 // PrimaryExpAST - 使用 variant，内联 LVal
-class PrimaryExpAST : public BaseAST {
+class PrimaryExpAST : public BaseAST
+{
 public:
     struct Number {
         int value;

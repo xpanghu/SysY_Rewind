@@ -1,5 +1,4 @@
 #include "ast.h"
-#include "koopa_ir_builder.h"
 #include "rewind_ir.h"
 #include "rewind_ir_builder.h"
 #include "riscv.h"
@@ -11,11 +10,7 @@
 
 using namespace std;
 
-// 声明 lexer 的输入, 以及 parser 函数
-// 为什么不引用 sysy.tab.hpp 呢? 因为首先里面没有 yyin 的定义
-// 其次, 因为这个文件不是我们自己写的, 而是被 Bison 生成出来的
-// 你的代码编辑器/IDE 很可能找不到这个文件, 然后会给你报错 (虽然编译不会出错)
-// 看起来会很烦人, 于是干脆采用这种看起来 dirty 但实际很有效的手段
+// 声明 lexer 的输入，以及 parser 函数
 extern FILE* yyin;
 extern int yyparse(unique_ptr<BaseAST>& ast);
 
@@ -30,12 +25,13 @@ int main(int argc, const char* argv[])
     yyin = fopen(input, "r");
     assert(yyin);
 
-    // 调用 parser 函数, parser 函数会进一步调用 lexer 解析输入文件
+    // 调用 parser 函数，parser 函数会进一步调用 lexer 解析输入文件
     unique_ptr<BaseAST> ast;
     auto ret = yyparse(ast);
     if (ret != 0 || !ast) {
         fclose(yyin);
-        throw runtime_error("yyparse failed: invalid SysY input or grammar action error");
+        throw runtime_error(
+            "yyparse failed: invalid SysY input or grammar action error");
     }
 
     ofstream out(output);
@@ -45,28 +41,25 @@ int main(int argc, const char* argv[])
         return 0;
     }
 
-    // ast -> rewind IR
+    // ast -> rewind IR (rewind_ir 是 Koopa IR 的 C++ 形式)
     rewind_ir::RewindIRBuilder rewind_builder;
     rewind_ir::IRModule module = rewind_builder.build(*ast);
 
-    // rewind IR -> koopa IR
-    rewind_ir::KoopaRawBuilder koopa_builder;
-    const auto raw_program = koopa_builder.build(module);
-
     if (std::string(mode) == "-koopa") {
-        // 由 koopa_raw_program_t 转换为 koopa_program
-        koopa_program_t koopa_program = nullptr;
-        const auto ec = koopa_generate_raw_to_koopa(&raw_program, &koopa_program);
-        assert(ec == KOOPA_EC_SUCCESS);
-
-        // 由 koopa_program 转换为 koopaIR 字符串形式, 并输入到 output 文件中
-        out << rewind_ir::dump_koopa_program_to_string(koopa_program);
-        koopa_delete_program(koopa_program);
+        // rewind IR -> koopa IR 文本
+        rewind_ir::IRTextGen ir_gen;
+        auto gen_ret = ir_gen.emit(module, out);
+        if (gen_ret != rewind_ir::IRErrorCode::SUCCESS) {
+            fclose(yyin);
+            throw runtime_error("IRTextGen::emit failed: check output file for error details");
+        }
     }
 
     if (std::string(mode) == "-riscv") {
-        riscv::emit_program(raw_program, out);
+        // rewind_ir -> RISC-V (direct, no koopa dependency)
+        riscv::emit_module(module, out);
     }
 
+    fclose(yyin);
     return 0;
 }

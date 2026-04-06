@@ -1,18 +1,15 @@
 #pragma once
 
-#include "koopa.h"
-
+#include "rewind_ir_type.h"
 #include <cassert>
-#include <deque>
 #include <memory>
-#include <optional>
-#include <stdexcept>
 #include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
+#include <stdexcept>
 
-// AST相关类
+// AST 相关类（前向声明）
 class BaseAST;
 class CompUnitAST;
 class FuncDefAST;
@@ -34,43 +31,27 @@ class ConstDefAST;
 class ConstInitValAST;
 class LValAST;
 
-namespace rewind_ir {
-enum class IRValueType;
-enum class IRValueKind;
-enum class IRBinaryOp;
-class Module;
-class IRFunction;
-class IRBasicBlock;
-class IRValue;
-class IRInstruction;
-class IRGlobalVariable;
+namespace rewind_ir
+{
 
-enum class IRValueType {
-    POINTER,
-    INT32,
-    UNIT,
-    ARRAY,
-    FUNCTION
-};
-
-// value(统一值模型)类型
 enum class IRValueKind {
-    IR_INTEGER, // int类型
-    IR_RETURN, // return
-    IR_BINARY, // 二元运算
-    IR_ALLOC,
-    IR_STORE,
-    IR_GLOBALALLOC,
-    IR_JUMP,
-    IR_BRANCH,
-    IR_CALL, // 函数调用
-    IR_GET_PTR,
-    IR_GET_ELEM_PTR,
-    IR_UNDEF,
-    IR_ZERO_INIT,
-    IR_AGGREGATE,
-    FUNC_ARG_REF,
-    BLOCK_ARG_REF
+    IR_INTEGER,      // 整数常量
+    IR_RETURN,       // 返回指令
+    IR_BINARY,       // 二元运算
+    IR_ALLOC,        // 栈分配（局部变量）
+    IR_STORE,        // 存储指令
+    IR_LOAD,         // 加载指令
+    IR_GLOBALALLOC,  // 全局分配
+    IR_JUMP,         // 无条件跳转
+    IR_BRANCH,       // 条件分支
+    IR_CALL,         // 函数调用
+    IR_GET_PTR,      // 指针计算
+    IR_GET_ELEM_PTR, // 元素指针计算
+    IR_UNDEF,        // 未定义值
+    IR_ZERO_INIT,    // 零初始化
+    IR_AGGREGATE,    // 聚合常量
+    FUNC_ARG_REF,    // 函数参数引用
+    BLOCK_ARG_REF    // 基本块参数引用
 };
 
 enum class IRBinaryOp {
@@ -81,117 +62,88 @@ enum class IRBinaryOp {
     SUB,
     EQ,
     NEQ,
-    AND, // 按位或
-    OR, // 按位或
+    AND,
+    OR,
     XOR,
     LT,
     GT,
     LE,
     GE,
-    SHL, // 逻辑左移
-    SHR, // 逻辑右移
-    SAR, // 算数右移
+    SHL,
+    SHR,
+    SAR,
 };
 
-class IRModule {
-public:
-    IRModule() = default;
-    IRModule(const IRModule&) = delete;
-    IRModule& operator=(const IRModule&) = delete;
-    IRModule(IRModule&&) noexcept = default;
-    IRModule& operator=(IRModule&&) noexcept = default;
+class IRModule;
+class IRFunction;
+class IRBasicBlock;
+class IRValue;
+class IRInstruction;
 
-    IRFunction* make_function(IRValueType type, std::string name);
-    IRBasicBlock* make_basic_block(std::string name = {});
-
-    template <typename T, typename... Args>
-    T* make_value(Args&&... args);
-
-    void append_basic_block(IRFunction& function, IRBasicBlock& block);
-    void append_inst(IRBasicBlock& block, IRValue& value);
-
-    std::vector<IRFunction*> funcs_;
-    std::vector<IRValue*> values_;
-
-private:
-    std::vector<std::unique_ptr<IRFunction>> func_storage_;
-    std::vector<std::unique_ptr<IRBasicBlock>> bb_storage_;
-    std::vector<std::unique_ptr<IRValue>> value_storage_;
-};
-
-class IRFunction {
-    friend class IRModule;
-
-public:
-    IRValueType type_;
-    std::string name_;
-    std::vector<IRBasicBlock*> basic_blocks_;
-
-private:
-    IRFunction() = default;
-    IRFunction(IRValueType type, std::string name)
-        : type_(type)
-        , name_(name)
-        , basic_blocks_({})
-    {
-    }
-};
-
-class IRBasicBlock {
+// ========= IRValue =========
+class IRValue
+{
     friend class IRModule;
 
 public:
     std::string name_;
-    std::vector<IRValue*> insts_;
-
-private:
-    IRBasicBlock() = default;
-    explicit IRBasicBlock(std::string name)
-        : name_(name)
-        , insts_({})
-    {
-    }
-};
-
-class IRValue {
-    friend class IRModule;
-
-public:
-    std::string name;
-    IRValueKind kind; // IRValue具体类型
+    IRValueKind kind_;
+    const IRType* type_;
 
     virtual ~IRValue() = default;
 
     template <typename T>
     T* as()
-    {
-        return static_cast<T*>(this);
-    }
+    { return static_cast<T*>(this); }
 
     template <typename T>
     const T* as() const
-    {
-        return static_cast<const T*>(this);
-    }
+    { return static_cast<const T*>(this); }
 
-    // Type predicates for common checks
-    bool is_binary() const { return kind == IRValueKind::IR_BINARY; }
-    bool is_integer() const { return kind == IRValueKind::IR_INTEGER; }
-    bool is_alloc() const { return kind == IRValueKind::IR_ALLOC; }
-    bool is_store() const { return kind == IRValueKind::IR_STORE; }
-    bool is_ret() const { return kind == IRValueKind::IR_RETURN; }
+    // 类型谓词
+    bool is_binary() const
+    { return kind_ == IRValueKind::IR_BINARY; }
+    bool is_integer() const
+    { return kind_ == IRValueKind::IR_INTEGER; }
+    bool is_alloc() const
+    { return kind_ == IRValueKind::IR_ALLOC; }
+    bool is_store() const
+    { return kind_ == IRValueKind::IR_STORE; }
+    bool is_load() const
+    { return kind_ == IRValueKind::IR_LOAD; }
+    bool is_ret() const
+    { return kind_ == IRValueKind::IR_RETURN; }
+    bool is_global_alloc() const
+    { return kind_ == IRValueKind::IR_GLOBALALLOC; }
 
 protected:
     IRValue() = default;
 
-    explicit IRValue(IRValueKind k, const std::string& name = {})
-        : name(name)
-        , kind(k)
+    explicit IRValue(IRValueKind k, const IRType* ty, const std::string& name = {}) : name_(name), kind_(k), type_(ty)
     {
     }
 };
 
-class IRInstruction : public IRValue {
+// No IR generated
+// name_ is empty
+// type_ = int32
+class IRConstant : public IRValue
+{
+    friend class IRModule;
+
+public:
+    int32_t value_;
+    ~IRConstant() override = default;
+
+private:
+    IRConstant() = default;
+    explicit IRConstant(int32_t value, const IRType* ty, const std::string& name = {}) : IRValue(IRValueKind::IR_INTEGER, ty, name), value_(value)
+    {
+    }
+};
+
+class IRInstruction : public IRValue
+{
     friend class IRModule;
 
 public:
@@ -200,67 +152,186 @@ public:
 protected:
     IRInstruction() = default;
 
-    explicit IRInstruction(IRValueKind k)
-        : IRValue(k)
+    explicit IRInstruction(IRValueKind k, const IRType* ty, const std::string& name = {}) : IRValue(k, ty, name)
     {
     }
 };
 
-class IRConstant : public IRValue {
+// example: @x = alloc i32
+// name_ = alloc name
+// type_ = pointer<i32>
+class IRAllocInst : public IRInstruction
+{
     friend class IRModule;
 
 public:
-    int value_;
-    ~IRConstant() override = default;
+    ~IRAllocInst() override = default;
 
 private:
-    IRConstant() = default;
-
-    explicit IRConstant(int value, const std::string& name = {})
-        : IRValue(IRValueKind::IR_INTEGER, name)
-        , value_(value)
+    IRAllocInst() = default;
+    // alloc_ty 应该是指针类型，如 pointer<i32>
+    explicit IRAllocInst(const IRType* alloc_ty, const std::string& name = {}) : IRInstruction(IRValueKind::IR_ALLOC, alloc_ty, name)
     {
     }
 };
 
-class IRReturnInst : public IRInstruction {
+// example: store value_, dest_
+// name_ is empty
+// type_ = unit
+class IRStoreInst : public IRInstruction
+{
     friend class IRModule;
 
 public:
-    IRValue* dst_;
+    IRValue* value_;
+    IRValue* dest_;
+    ~IRStoreInst() override = default;
+
+private:
+    IRStoreInst() = default;
+    explicit IRStoreInst(IRValue* value, IRValue* dest, const std::string& name = {}) : IRInstruction(IRValueKind::IR_STORE, nullptr, name), value_(value), dest_(dest)
+    {
+    }
+};
+
+// example: %0 = load @x
+// name represent inst name(virtual register)
+// type_ = int32
+class IRLoadInst : public IRInstruction
+{
+    friend class IRModule;
+
+public:
+    IRValue* src_;
+    ~IRLoadInst() override = default;
+
+private:
+    IRLoadInst() = default;
+    explicit IRLoadInst(IRValue* src, const IRType* ty, const std::string& name = {}) : IRInstruction(IRValueKind::IR_LOAD, ty, name), src_(src)
+    {
+    }
+};
+
+// example: global @name = alloc i32
+// name represent alloc name
+// type_ = pointer<i32>
+class IRGlobalAllocInst : public IRInstruction
+{
+    friend class IRModule;
+
+public:
+    IRValue* init_; // 初始值
+    ~IRGlobalAllocInst() override = default;
+
+private:
+    IRGlobalAllocInst() = default;
+    explicit IRGlobalAllocInst(IRValue* init, const std::string& name = {}) : IRInstruction(IRValueKind::IR_GLOBALALLOC, nullptr, name), init_(init)
+    {
+    }
+};
+
+// example: ret %0
+// name is empty
+// type_ = unit
+class IRReturnInst : public IRInstruction
+{
+    friend class IRModule;
+
+public:
+    IRValue* dst_; // 返回值（可以为 nullptr 表示 void 返回）
     ~IRReturnInst() override = default;
 
 private:
     IRReturnInst() = default;
-    explicit IRReturnInst(IRValue* dst)
-        : IRInstruction(IRValueKind::IR_RETURN)
-        , dst_(dst)
+    explicit IRReturnInst(IRValue* dst, const std::string& name = {}) : IRInstruction(IRValueKind::IR_RETURN, nullptr, name), dst_(dst)
     {
     }
 };
 
-class IRBinaryInst : public IRInstruction {
+// example: %2 = add %0, %1
+// name represent virtual register
+// type_ = int32
+class IRBinaryInst : public IRInstruction
+{
     friend class IRModule;
 
 public:
     IRValue* lhs_;
     IRValue* rhs_;
     IRBinaryOp op_;
-
     ~IRBinaryInst() override = default;
 
 private:
     IRBinaryInst() = default;
-    explicit IRBinaryInst(IRBinaryOp op, IRValue* lhs = nullptr, IRValue* rhs = nullptr)
-        : IRInstruction(IRValueKind::IR_BINARY)
-        , lhs_(lhs)
-        , rhs_(rhs)
-        , op_(op)
+    explicit IRBinaryInst(IRBinaryOp op, IRValue* lhs, IRValue* rhs,
+                          const IRType* ty, const std::string& name = {}) : IRInstruction(IRValueKind::IR_BINARY, ty, name), lhs_(lhs), rhs_(rhs), op_(op)
     {
     }
 };
 
-inline IRFunction* IRModule::make_function(IRValueType type, std::string name)
+// ========== IRBasicBlock ==========
+class IRBasicBlock
+{
+    friend class IRModule;
+
+public:
+    std::string name_;
+    std::vector<IRValue*> insts_;
+
+private:
+    IRBasicBlock() = default;
+    explicit IRBasicBlock(const std::string& name, std::vector<IRValue*> insts = {}) : name_(name), insts_(insts)
+    {
+    }
+};
+
+class IRFunction
+{
+    friend class IRModule;
+
+public:
+    const IRType* type_; // 函数类型（如 function<[i32], i32>）
+    std::string name_;
+    std::vector<IRBasicBlock*> basic_blocks_;
+
+private:
+    IRFunction() = default;
+    explicit IRFunction(const IRType* type, const std::string& name) : type_(type), name_(name), basic_blocks_({})
+    {
+    }
+};
+
+// ========== IRModule ==========
+class IRModule
+{
+public:
+    IRModule() = default;
+    IRModule(const IRModule&) = delete;
+    IRModule& operator=(const IRModule&) = delete;
+    IRModule(IRModule&&) noexcept = default;
+    IRModule& operator=(IRModule&&) noexcept = default;
+
+    IRFunction* make_function(const IRType* type, const std::string& name);
+
+    IRBasicBlock* make_basic_block(const std::string& name, std::vector<IRValue*> insts = {});
+
+    template <typename T, typename... Args>
+    T* make_value(Args&&... args);
+
+    void append_basic_block(IRFunction& function, IRBasicBlock& block);
+
+    void append_inst(IRBasicBlock& block, IRValue& value);
+
+    std::vector<IRFunction*> funcs_;
+    std::vector<IRValue*> global_values_;
+
+private:
+    std::vector<std::unique_ptr<IRFunction>> func_storage_;
+    std::vector<std::unique_ptr<IRBasicBlock>> bb_storage_;
+    std::vector<std::unique_ptr<IRValue>> value_storage_;
+};
+
+inline IRFunction* IRModule::make_function(const IRType* type, const std::string& name)
 {
     std::unique_ptr<IRFunction> func(new IRFunction(type, name));
     IRFunction* ptr = func.get();
@@ -269,9 +340,9 @@ inline IRFunction* IRModule::make_function(IRValueType type, std::string name)
     return ptr;
 }
 
-inline IRBasicBlock* IRModule::make_basic_block(std::string name)
+inline IRBasicBlock* IRModule::make_basic_block(const std::string& name, std::vector<IRValue*> insts)
 {
-    std::unique_ptr<IRBasicBlock> bb(new IRBasicBlock(name));
+    std::unique_ptr<IRBasicBlock> bb(new IRBasicBlock(name, insts));
     IRBasicBlock* ptr = bb.get();
     bb_storage_.push_back(std::move(bb));
     return ptr;
@@ -280,12 +351,10 @@ inline IRBasicBlock* IRModule::make_basic_block(std::string name)
 template <typename T, typename... Args>
 inline T* IRModule::make_value(Args&&... args)
 {
-    static_assert(std::is_base_of_v<IRValue, T>,
-        "make_value<T>: T must derive from IRValue");
+    static_assert(std::is_base_of_v<IRValue, T>, "make_value<T>: T must derive from IRValue");
     std::unique_ptr<T> value(new T(std::forward<Args>(args)...));
     T* ptr = value.get();
     value_storage_.push_back(std::move(value));
-    values_.push_back(ptr);
     return ptr;
 }
 
@@ -299,4 +368,4 @@ inline void IRModule::append_inst(IRBasicBlock& block, IRValue& value)
     block.insts_.push_back(&value);
 }
 
-} // namespace koopa_ir
+} // namespace rewind_ir
