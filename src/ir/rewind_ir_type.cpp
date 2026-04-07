@@ -73,7 +73,6 @@ const IRFunctionType* IRTypeContext::getFunction(std::vector<const IRType*> para
         throw std::runtime_error("function return type cannot be null");
     }
 
-    // 计算 hash 作为 key
     size_t hash = 0;
     hash ^= std::hash<size_t>()(reinterpret_cast<size_t>(ret) << 1);
     for (size_t i = 0; i < params.size(); i++) {
@@ -95,6 +94,7 @@ const IRFunctionType* IRTypeContext::getFunction(std::vector<const IRType*> para
     return ptr;
 }
 
+// ! too many magic number
 // getTypeSzie and getTypeAlign compose DataLayout
 // bridge from IR to backend
 size_t IRTypeContext::getTypeSize(const IRType* type) const
@@ -126,6 +126,7 @@ size_t IRTypeContext::getTypeSize(const IRType* type) const
     return 0;
 }
 
+// ! too many magic number
 size_t IRTypeContext::getTypeAlign(const IRType* type) const
 {
     if (type == nullptr) {

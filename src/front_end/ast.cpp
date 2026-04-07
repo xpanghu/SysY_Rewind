@@ -231,6 +231,21 @@ void StmtAST::Dump(std::ostream& out, int indent) const
                 stmt.exp->Dump(out, indent + 4);
                 out << "\n";
             }
+        } else if constexpr (std::is_same_v<T, Block>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: block\n";
+            if (stmt.block) {
+                out << ast_dump_detail::indent(indent + 2) << "block:\n";
+                stmt.block->Dump(out, indent + 4);
+                out << "\n";
+            }
+        } else if constexpr (std::is_same_v<T, Exp>) {
+            out << ast_dump_detail::indent(indent + 2)
+                << "kind: " << (stmt.exp ? "exp" : "empty") << "\n";
+            if (stmt.exp) {
+                out << ast_dump_detail::indent(indent + 2) << "exp:\n";
+                stmt.exp->Dump(out, indent + 4);
+                out << "\n";
+            }
         }
     },
         payload);

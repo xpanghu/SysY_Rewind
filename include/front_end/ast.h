@@ -202,11 +202,19 @@ public:
         std::unique_ptr<BaseAST> exp;
     };
 
+    struct Block {
+        std::unique_ptr<BaseAST> block;
+    };
+
+    struct Exp {
+        std::unique_ptr<BaseAST> exp;
+    };
+
     struct Return {
         std::unique_ptr<BaseAST> exp;
     };
 
-    using Payload = std::variant<Return, Assign>;
+    using Payload = std::variant<Return, Assign, Block, Exp>;
     Payload payload;
 
     void Dump(std::ostream& out, int indent = 0) const override;

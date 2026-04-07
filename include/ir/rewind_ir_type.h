@@ -9,7 +9,7 @@
 namespace rewind_ir
 {
 
-// ========== 类型标签 ==========
+// type tag
 enum class IRTypeTag {
     INT32,
     UNIT,
@@ -18,7 +18,6 @@ enum class IRTypeTag {
     FUNCTION,
 };
 
-// ========== 基类（polymorphic）==========
 class IRType
 {
 public:
@@ -45,8 +44,7 @@ public:
     bool is_function() const
     { return tag == IRTypeTag::FUNCTION; }
 
-    // 安全转换
-    // 后续可以增加断言, 函数列表增加期望类型
+    // assertions can be added, the function list can include expected types.
     // assert(tag, expected_tag)
     template <typename T>
     const T* as() const
@@ -61,7 +59,6 @@ public:
     }
 };
 
-// ========== 派生类型 ==========
 // INT32
 class IRInt32Type : public IRType
 {
@@ -115,24 +112,29 @@ public:
     }
 };
 
-// ========== 类型上下文（单例 + 唯一化）==========
+// Type context
+// singleton Pattern
 class IRTypeContext
 {
 public:
     static IRTypeContext& instance();
 
-    // 工厂函数 - 返回唯一类型实例
+    // factory function - return the singleton instance of the type
     const IRInt32Type* getInt32();
     const IRUnitType* getUnit();
     const IRArrayType* getArray(const IRType* elem, size_t len);
     const IRPointerType* getPointer(const IRType* base);
     const IRFunctionType* getFunction(std::vector<const IRType*> params, const IRType* ret);
 
-    // DataLayout
+    /*
+     * target-dependent type lowering / data layout
+     * Map the "IRType" to the representation on the specific target machine
+     * (size, alignment, layout, register/stack passing method)
+     */
     size_t getTypeSize(const IRType* type) const;
     size_t getTypeAlign(const IRType* type) const;
 
-    // 禁止拷贝
+    // prohibit copy
     IRTypeContext(const IRTypeContext&) = delete;
     IRTypeContext& operator=(const IRTypeContext&) = delete;
 
@@ -140,12 +142,11 @@ private:
     IRTypeContext() = default;
     ~IRTypeContext() = default;
 
-    // 内置类型
+    // built-in type
     IRInt32Type int32_type_;
     IRUnitType unit_type_;
 
-    // 缓存复合类型
-    // 考虑使用unordered_map替代
+    // ? consider use unordered_map to replace map
     std::map<std::pair<const IRType*, size_t>, std::unique_ptr<IRArrayType>> array_types_;
     std::map<const IRType*, std::unique_ptr<IRPointerType>> pointer_types_;
     std::map<size_t, std::unique_ptr<IRFunctionType>> function_types_;

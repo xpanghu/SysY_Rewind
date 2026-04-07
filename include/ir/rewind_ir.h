@@ -169,7 +169,7 @@ public:
 
 private:
     IRAllocInst() = default;
-    // alloc_ty 应该是指针类型，如 pointer<i32>
+
     explicit IRAllocInst(const IRType* alloc_ty, const std::string& name = {}) : IRInstruction(IRValueKind::IR_ALLOC, alloc_ty, name)
     {
     }
@@ -195,7 +195,7 @@ private:
 };
 
 // example: %0 = load @x
-// name represent inst name(virtual register)
+// name represent inst result(virtual register)
 // type_ = int32
 class IRLoadInst : public IRInstruction
 {
@@ -220,7 +220,7 @@ class IRGlobalAllocInst : public IRInstruction
     friend class IRModule;
 
 public:
-    IRValue* init_; // 初始值
+    IRValue* init_;
     ~IRGlobalAllocInst() override = default;
 
 private:
@@ -238,7 +238,7 @@ class IRReturnInst : public IRInstruction
     friend class IRModule;
 
 public:
-    IRValue* dst_; // 返回值（可以为 nullptr 表示 void 返回）
+    IRValue* dst_; // return value（nullptr represent void）
     ~IRReturnInst() override = default;
 
 private:
@@ -290,7 +290,7 @@ class IRFunction
     friend class IRModule;
 
 public:
-    const IRType* type_; // 函数类型（如 function<[i32], i32>）
+    const IRType* type_; // example: function<[i32], i32>）
     std::string name_;
     std::vector<IRBasicBlock*> basic_blocks_;
 

@@ -59,8 +59,10 @@ int32_t FunctionFrame::align_to(int32_t value, int32_t align)
  | ----------------------------- |
  |       saved registers         |
  |       local variables         |
- |       function params         | <-- sp register address
- | ----------------------------- |     low address
+ |       temp values             | <-- inst result
+ |       function params         |     low address
+ | ----------------------------- |
+ |                               | <-- sp register address
  * the design of stack frame
  * 1. low address part stores function param slots
  * 2. then stores local variable object slots and IR median slots
@@ -68,6 +70,8 @@ int32_t FunctionFrame::align_to(int32_t value, int32_t align)
  * return address is currently stored in ra
  * improve: return address store in stack frame
  */
+
+// ! return address store in ra register , not store in stack frame
 void FunctionFrame::build(const rewind_ir::IRFunction& func)
 {
     next_slot_offset_ = 0;
@@ -91,7 +95,7 @@ void FunctionFrame::build(const rewind_ir::IRFunction& func)
         }
     }
 
-    frame_size_ = align_to(next_slot_offset_, 16);
+    frame_size_ = align_to(next_slot_offset_, align);
     // ra_offset_ = frame_size_ - kWordSize;
 }
 
@@ -105,6 +109,7 @@ bool FunctionFrame::has_value_slot(const rewind_ir::IRValue* value) const
     return find_slot(value_slots_, value) != nullptr;
 }
 
+// return the offest of the variable in stack frame
 int32_t FunctionFrame::object_slot(const rewind_ir::IRValue* value) const
 {
     if (const auto* slot = find_slot(object_slots_, value)) {
@@ -113,6 +118,7 @@ int32_t FunctionFrame::object_slot(const rewind_ir::IRValue* value) const
     throw std::runtime_error("missing object slot");
 }
 
+// return the offest of the inst in stack frame
 int32_t FunctionFrame::value_slot(const rewind_ir::IRValue* value) const
 {
     if (const auto* slot = find_slot(value_slots_, value)) {
@@ -253,28 +259,34 @@ void IREmitter::emit_instruction(const rewind_ir::IRValue& inst)
     throw std::runtime_error("unsupported rewind IR instruction in RISC-V backend: " + inst.name_);
 }
 
+// local alloc will do nothing
 void IREmitter::emit_alloc(const rewind_ir::IRAllocInst& inst)
 {
-    (void)inst;
+    return;
 }
 
+// load value to dst register
 void IREmitter::materialize_value(const rewind_ir::IRValue* value, Register dst)
 {
+    // maybe throw runtime error
     if (value == nullptr) {
         emit_li(dst, 0);
         return;
     }
 
+    // immeidate
     if (value->kind_ == rewind_ir::IRValueKind::IR_INTEGER) {
         emit_li(dst, value->as<rewind_ir::IRConstant>()->value_);
         return;
     }
 
+    // inst result
     if (frame_.has_value_slot(value)) {
         emit_stack_load(dst, frame_.value_slot(value));
         return;
     }
 
+    // variable
     if (frame_.has_object_slot(value)) {
         emit_stack_address(dst, frame_.object_slot(value));
         return;
@@ -283,8 +295,10 @@ void IREmitter::materialize_value(const rewind_ir::IRValue* value, Register dst)
     throw std::runtime_error("cannot materialize IR value: " + value->name_);
 }
 
+// load address to dst register
 void IREmitter::materialize_pointer(const rewind_ir::IRValue* value, Register dst)
 {
+    // maybe throw runtime error
     if (value == nullptr) {
         throw std::runtime_error("null pointer operand");
     }
@@ -302,6 +316,7 @@ void IREmitter::materialize_pointer(const rewind_ir::IRValue* value, Register ds
     throw std::runtime_error("cannot materialize pointer value: " + value->name_);
 }
 
+// store src(inst result) to stack
 void IREmitter::spill_value(const rewind_ir::IRValue* value, Register src)
 {
     if (!frame_.has_value_slot(value)) {
@@ -310,28 +325,40 @@ void IREmitter::spill_value(const rewind_ir::IRValue* value, Register src)
     emit_stack_store(src, frame_.value_slot(value));
 }
 
+// emit store inst
 void IREmitter::emit_store(const rewind_ir::IRStoreInst& inst)
 {
+    // step 1 : load value to register t0
     materialize_value(inst.value_, Register::t0);
 
+    // step2 : check dest type
+    // local variable type
+    // directly store value to stack
     if (frame_.has_object_slot(inst.dest_)) {
         emit_stack_store(Register::t0, frame_.object_slot(inst.dest_));
-        return;
+    } else {
+        // pointer type
+        // cal the address
+        // store value to stack
+        materialize_pointer(inst.dest_, Register::t1);
+        emit_sw(Register::t0, Register::t1, 0);
     }
-
-    materialize_pointer(inst.dest_, Register::t1);
-    emit_sw(Register::t0, Register::t1, 0);
 }
 
+// emit load inst
 void IREmitter::emit_load(const rewind_ir::IRLoadInst& inst)
 {
+    // check src type
     if (frame_.has_object_slot(inst.src_)) {
+        // local variable
+        // load value from stack
         emit_stack_load(Register::t0, frame_.object_slot(inst.src_));
     } else {
         materialize_pointer(inst.src_, Register::t1);
         emit_lw(Register::t0, Register::t1, 0);
     }
 
+    // store inst result to stack frame(inst)
     spill_value(&inst, Register::t0);
 }
 
@@ -388,22 +415,20 @@ void IREmitter::emit_binary(const rewind_ir::IRBinaryInst& inst)
         emit_seqz(Register::t0, Register::t0);
         break;
     case rewind_ir::IRBinaryOp::SHL:
-        out_ << "  sll " << reg_name(Register::t0) << ", " << reg_name(Register::t0)
-             << ", " << reg_name(Register::t1) << "\n";
+        emit_sll(Register::t0, Register::t0, Register::t1);
         break;
     case rewind_ir::IRBinaryOp::SHR:
-        out_ << "  srl " << reg_name(Register::t0) << ", " << reg_name(Register::t0)
-             << ", " << reg_name(Register::t1) << "\n";
+        emit_srl(Register::t0, Register::t0, Register::t1);
         break;
     case rewind_ir::IRBinaryOp::SAR:
-        out_ << "  sra " << reg_name(Register::t0) << ", " << reg_name(Register::t0)
-             << ", " << reg_name(Register::t1) << "\n";
+        emit_sra(Register::t0, Register::t0, Register::t1);
         break;
     }
 
     spill_value(&inst, Register::t0);
 }
 
+// emit return inst
 void IREmitter::emit_return(const rewind_ir::IRReturnInst& inst)
 {
     materialize_value(inst.dst_, Register::a0);
@@ -411,14 +436,14 @@ void IREmitter::emit_return(const rewind_ir::IRReturnInst& inst)
     emit_ret();
 }
 
-//
+// assgin stack frame
 void IREmitter::emit_prologue()
 {
     emit_adjust_sp(-frame_.frame_size());
     // emit_stack_store(Register::ra, frame_.ra_offset());
 }
 
-// restore sp register
+// recover stack frame
 void IREmitter::emit_epilogue()
 {
     // emit_stack_load(Register::ra, frame_.ra_offset());
@@ -426,31 +451,38 @@ void IREmitter::emit_epilogue()
 }
 
 // adjust sp
-// sp add frame_size
-// sp sub frame_size
 void IREmitter::emit_adjust_sp(int32_t delta)
 {
-    // check immediate number is in [-2048, 2047]
+    // imm range is [-2048, 2047]
+    // check if imm out of range
     if (fits_i12(delta)) {
         emit_addi(Register::sp, Register::sp, delta);
         return;
     }
 
+    // imm out of range
+    // load imm to t0 then add sp t0 to sp
     emit_li(Register::t0, delta);
     emit_add(Register::sp, Register::sp, Register::t0);
 }
 
-void IREmitter::emit_stack_address(Register rd, int32_t offset)
+// cal stack address to rd
+void IREmitter::emit_stack_address(Register rd, int32_t offset, Register scratch)
 {
     if (fits_i12(offset)) {
         emit_addi(rd, Register::sp, offset);
         return;
     }
 
-    emit_li(Register::t2, offset);
-    emit_add(rd, Register::sp, Register::t2);
+    if (scratch == rd) {
+        throw std::runtime_error("stack address scratch register conflicts with destination register");
+    }
+
+    emit_li(scratch, offset);
+    emit_add(rd, Register::sp, scratch);
 }
 
+// load stack value to rd
 void IREmitter::emit_stack_load(Register rd, int32_t offset, Register scratch)
 {
     if (fits_i12(offset)) {
@@ -462,6 +494,7 @@ void IREmitter::emit_stack_load(Register rd, int32_t offset, Register scratch)
     emit_lw(rd, scratch, 0);
 }
 
+// store rs to stack
 void IREmitter::emit_stack_store(Register rs, int32_t offset, Register scratch)
 {
     if (fits_i12(offset)) {
@@ -473,6 +506,7 @@ void IREmitter::emit_stack_store(Register rs, int32_t offset, Register scratch)
         throw std::runtime_error("stack store scratch register conflicts with source register");
     }
 
+    // if imm out of range, use scrath register to store stack frame address
     emit_stack_address(scratch, offset);
     emit_sw(rs, scratch, 0);
 }
@@ -544,6 +578,24 @@ void IREmitter::emit_xor(Register rd, Register rs1, Register rs2)
 void IREmitter::emit_slt(Register rd, Register rs1, Register rs2)
 {
     out_ << "  slt " << reg_name(rd) << ", " << reg_name(rs1)
+         << ", " << reg_name(rs2) << "\n";
+}
+
+void IREmitter::emit_sll(Register rd, Register rs1, Register rs2)
+{
+    out_ << "  sll " << reg_name(rd) << ", " << reg_name(rs1)
+         << ", " << reg_name(rs2) << "\n";
+}
+
+void IREmitter::emit_srl(Register rd, Register rs1, Register rs2)
+{
+    out_ << "  srl " << reg_name(rd) << ", " << reg_name(rs1)
+         << ", " << reg_name(rs2) << "\n";
+}
+
+void IREmitter::emit_sra(Register rd, Register rs1, Register rs2)
+{
+    out_ << "  sra " << reg_name(rd) << ", " << reg_name(rs1)
          << ", " << reg_name(rs2) << "\n";
 }
 

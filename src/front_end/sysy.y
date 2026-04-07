@@ -178,8 +178,11 @@ InitVal
 Block
     : '{' BlockItemList '}' {
         auto ast = new BlockAST();
-        ast->items = std::move(*($2)); 
-        delete $2;
+        // BlockItemList may be empty
+        if ($2 != nullptr) {
+            ast->items = std::move(*($2));
+            delete $2;
+        }
         $$ = ast;
     }
     ;
@@ -210,6 +213,11 @@ Stmt
         ast->payload = StmtAST::Return { unique_ptr<BaseAST>($2) };
         $$ = ast;
     }
+    | RETURN ';' {
+        auto ast = new StmtAST();
+        ast->payload = StmtAST::Return { nullptr };
+        $$ = ast;
+    }
     | IDENT '=' Exp ';'
     {
         auto ast = new StmtAST();
@@ -217,6 +225,21 @@ Stmt
             *unique_ptr<string>($1),
             unique_ptr<BaseAST>($3) 
         };
+        $$ = ast;
+    }
+    | Exp ';' {
+        auto ast = new StmtAST();
+        ast->payload = StmtAST::Exp {unique_ptr<BaseAST>($1) };
+        $$ = ast;
+    } 
+    | ';' {
+        auto ast = new StmtAST();
+        ast->payload = StmtAST::Exp { nullptr };
+        $$ = ast;
+    }
+    | Block {
+        auto ast = new StmtAST();
+        ast->payload = StmtAST::Block { unique_ptr<BaseAST>($1) };
         $$ = ast;
     }
     ;

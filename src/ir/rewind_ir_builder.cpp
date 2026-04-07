@@ -107,6 +107,10 @@ overloaded(Ts...) -> overloaded<Ts...>;
 IRModule RewindIRBuilder::build(const BaseAST& ast)
 {
     IRModule module{};
+    symbol_table_ = SymbolTable{};
+    constant_cache_.clear();
+    alloc_name_counter_.clear();
+    value_counter_ = 0;
     const auto& comp_unit = expect_node<CompUnitAST>(ast, "CompUnitAST");
     lower_comp_unit(comp_unit, module);
     return module;
@@ -316,21 +320,17 @@ IRFunction* RewindIRBuilder::lower_func_def(const FuncDefAST& ast,
     auto type = lower_func_type(func_type, module);
     auto func = module.make_function(type, ast.ident);
 
-    // reset virtual register
+    // reset function-local naming state
     value_counter_ = 0;
+    alloc_name_counter_.clear();
 
-    // enter function scope
-    symbol_table_.enter_scope();
+    // Current SysY subset only has straight-line control flow, so nested `{}`:
+    // affect scope lookup but do not create new IR basic blocks.
+    auto* basic_block = module.make_basic_block("%entry");
+    module.append_basic_block(*func, *basic_block);
 
-    // traverse basic_blocks
     const auto& block = expect_node<BlockAST>(*ast.block, "BlockAST");
-    auto basic_block = lower_block(block, module);
-    if (basic_block != nullptr) {
-        module.append_basic_block(*func, *basic_block);
-    }
-
-    // exit function scope
-    symbol_table_.exit_scope();
+    lower_block(block, module, basic_block);
 
     return func;
 }
@@ -347,27 +347,26 @@ const IRType* RewindIRBuilder::lower_func_type(const FuncTypeAST& ast,
     throw std::runtime_error("unsupported FuncTypeAST");
 }
 
-IRBasicBlock* RewindIRBuilder::lower_block(const BlockAST& ast, IRModule& module)
+void RewindIRBuilder::lower_block(const BlockAST& ast, IRModule& module, IRBasicBlock* current_block)
 {
-    // create empty block
-    auto* basic_block = module.make_basic_block("%entry");
+    symbol_table_.enter_scope();
 
     for (const auto& item : ast.items) {
         if (auto* stmt = dynamic_cast<StmtAST*>(item.get())) {
-            lower_stmt(*stmt, module, basic_block);
+            lower_stmt(*stmt, module, current_block);
         }
         // 处理常量和变量
         if (auto* decl = dynamic_cast<DeclAST*>(item.get())) {
             if (auto* const_decl = dynamic_cast<ConstDeclAST*>(decl->const_or_var.get())) {
                 lower_const_decl(*const_decl, module);
             } else if (auto* var_decl = dynamic_cast<VarDeclAST*>(decl->const_or_var.get())) {
-                lower_var_decl(*var_decl, module, basic_block);
+                lower_var_decl(*var_decl, module, current_block);
             } else {
                 throw std::runtime_error("no such decl");
             }
         }
     }
-    return basic_block;
+    symbol_table_.exit_scope();
 }
 
 void RewindIRBuilder::lower_const_decl(const ConstDeclAST& ast, IRModule& module)
@@ -395,13 +394,13 @@ void RewindIRBuilder::lower_var_decl(const VarDeclAST& ast, IRModule& module, IR
         std::visit(
             overloaded{
                 [&](const VarDefAST::DefEmpty& def) {
-                    auto alloc = module.make_value<IRAllocInst>(i32_ptr_type, "@" + def.ident);
+                    auto alloc = module.make_value<IRAllocInst>(i32_ptr_type, next_alloc_name(def.ident));
                     module.append_inst(*current_block, *alloc);
                     symbol_table_.define_var(def.ident, alloc);
                 },
                 [&](const VarDefAST::DefValue& def) {
                     // @ident = alloc i32
-                    auto alloc = module.make_value<IRAllocInst>(i32_ptr_type, "@" + def.ident);
+                    auto alloc = module.make_value<IRAllocInst>(i32_ptr_type, next_alloc_name(def.ident));
                     module.append_inst(*current_block, *alloc);
                     symbol_table_.define_var(def.ident, alloc);
 
@@ -424,30 +423,44 @@ void RewindIRBuilder::lower_stmt(const StmtAST& ast, IRModule& module, IRBasicBl
 {
     return std::visit(
         overloaded{
-            [&](const StmtAST::Return& ret) {
-                const auto& exp = expect_node<ExpAST>(*ret.exp, "ExpAST");
-                auto exp_value = lower_exp(exp, module, current_block);
-                auto ret_inst = module.make_value<IRReturnInst>(exp_value);
+            [&](const StmtAST::Return& ret_stmt) {
+                IRValue* ret_value = nullptr;
+                if (ret_stmt.exp) {
+                    const auto& exp = expect_node<ExpAST>(*ret_stmt.exp, "ExpAST");
+                    ret_value = lower_exp(exp, module, current_block);
+                }
+                auto ret_inst = module.make_value<IRReturnInst>(ret_value);
 
                 module.append_inst(*current_block, *ret_inst);
             },
-            [&](const StmtAST::Assign& assign) {
+            [&](const StmtAST::Assign& assign_stmt) {
                 // assign
                 // store exp_value, alloc
-                const auto& exp = expect_node<ExpAST>(*assign.exp, "ExpAST");
+                const auto& exp = expect_node<ExpAST>(*assign_stmt.exp, "ExpAST");
                 auto exp_value = lower_exp(exp, module, current_block);
 
-                auto value = symbol_table_.lookup(assign.LVal);
+                auto value = symbol_table_.lookup(assign_stmt.LVal);
                 // value not exist or value is const throw error
                 if (!value) {
-                    throw std::runtime_error(assign.LVal + "is not exist");
+                    throw std::runtime_error(assign_stmt.LVal + "is not exist");
                 } else if (std::holds_alternative<int32_t>(*value)) {
-                    throw std::runtime_error(assign.LVal + "is not variable");
+                    throw std::runtime_error(assign_stmt.LVal + "is not variable");
                 }
 
                 auto alloc = std::get<IRValue*>(*value);
                 auto store_inst = module.make_value<IRStoreInst>(exp_value, alloc);
                 module.append_inst(*current_block, *store_inst);
+            },
+            [&](const StmtAST::Block& block_stmt) {
+                const auto& block = expect_node<BlockAST>(*block_stmt.block, "BlockAST");
+                lower_block(block, module, current_block);
+            },
+            [&](const StmtAST::Exp& exp_stmt) {
+                if (!exp_stmt.exp) {
+                    return;
+                }
+                const auto& exp = expect_node<ExpAST>(*exp_stmt.exp, "ExpAST");
+                static_cast<void>(lower_exp(exp, module, current_block));
             },
             [&](const auto& other) {
                 std::string type_name = typeid(other).name();
@@ -724,9 +737,18 @@ IRValue* RewindIRBuilder::get_or_create_constant(int32_t value, IRModule& module
     return c;
 }
 
+// return inst result name
 std::string RewindIRBuilder::next_value_name()
 {
     return "%" + std::to_string(value_counter_++);
+}
+
+// return value name
+std::string RewindIRBuilder::next_alloc_name(const std::string& ident)
+{
+    int& counter = alloc_name_counter_[ident];
+    ++counter;
+    return "@" + ident + "_" + std::to_string(counter);
 }
 
 /*
@@ -801,8 +823,6 @@ void IRTextGen::print_basic_block(const IRBasicBlock* block, std::ostream& out)
 
     // print all insts
     for (const auto* inst : block->insts_) {
-        // out << block->insts_.size() << "\n";
-        // out << "debug block\n";
         std::ostringstream line;
         print_instruction(inst, line);
         if (!line.str().empty()) {
@@ -813,7 +833,6 @@ void IRTextGen::print_basic_block(const IRBasicBlock* block, std::ostream& out)
 
 void IRTextGen::print_instruction(const IRValue* inst, std::ostream& out)
 {
-    // out << "debug value\n";
     // const not require inst
     if (inst->is_integer()) {
         return;
@@ -832,18 +851,25 @@ void IRTextGen::print_instruction(const IRValue* inst, std::ostream& out)
 
     if (inst->is_ret()) {
         const auto* ret = inst->as<IRReturnInst>();
-        out << "  ret ";
-        print_value(ret->dst_, out);
+        out << "  ret";
+        if (ret->dst_ != nullptr) {
+            out << " ";
+            print_value(ret->dst_, out);
+        }
         return;
     }
 
     // local alloc
-    // need to print type
     if (inst->is_alloc()) {
         const auto* alloc = inst->as<IRAllocInst>();
         out << "  " << alloc->name_ << " = ";
-        // ? not sure to use this type, need to improve
-        out << "alloc " << "i32";
+        if (alloc->type_->is_pointer()) {
+            const auto* alloc_type = alloc->type_->as<IRPointerType>();
+            out << "alloc ";
+            print_type(alloc_type->base_type, out);
+        } else {
+            throw std::runtime_error("alloc instruction must have pointer type");
+        }
         return;
     }
 
@@ -871,7 +897,7 @@ void IRTextGen::print_instruction(const IRValue* inst, std::ostream& out)
 }
 
 // print operand
-// const or virtual register
+// const or inst result
 void IRTextGen::print_value(const IRValue* value, std::ostream& out)
 {
     // const

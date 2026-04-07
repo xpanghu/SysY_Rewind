@@ -23,6 +23,7 @@ enum class Register {
 class FunctionFrame
 {
 public:
+    const int align = 16;
     void build(const rewind_ir::IRFunction& func);
 
     bool has_object_slot(const rewind_ir::IRValue* value) const;
@@ -50,12 +51,12 @@ private:
     int32_t frame_size_ = 16; // the size of stack frame
     int32_t ra_offset_ = 12;
     std::unordered_map<const rewind_ir::IRValue*, int32_t> object_slots_; // represent the stack offest of the variable
-    std::unordered_map<const rewind_ir::IRValue*, int32_t> value_slots_;  // represent the stack offest of the inst value
+    std::unordered_map<const rewind_ir::IRValue*, int32_t> value_slots_;  // represent the stack offest of the intst result
 };
 
 /*
- * lw rs, imm12(rd) : read mem(rd + imm12) , then store to rs
- * sw rs, imm12(rd) : store value of rs  to mem(rd + imm12)
+ * lw rs, imm12(rd) : read the value of mem(rd + imm12) , then store to rs
+ * sw rs, imm12(rd) : store the value of rs to mem(rd + imm12)
  */
 class IREmitter
 {
@@ -84,7 +85,7 @@ private:
     void spill_value(const rewind_ir::IRValue* value, Register src);
 
     void emit_adjust_sp(int32_t delta);
-    void emit_stack_address(Register rd, int32_t offset);
+    void emit_stack_address(Register rd, int32_t offset, Register scratch = Register::t2);
     void emit_stack_load(Register rd, int32_t offset, Register scratch = Register::t2);
     void emit_stack_store(Register rs, int32_t offset, Register scratch = Register::t2);
 
@@ -100,6 +101,9 @@ private:
     void emit_or(Register rd, Register rs1, Register rs2);
     void emit_xor(Register rd, Register rs1, Register rs2);
     void emit_slt(Register rd, Register rs1, Register rs2);
+    void emit_sll(Register rd, Register rs1, Register rs2);
+    void emit_srl(Register rd, Register rs1, Register rs2);
+    void emit_sra(Register rd, Register rs1, Register rs2);
     void emit_seqz(Register rd, Register rs);
     void emit_snez(Register rd, Register rs);
     void emit_lw(Register rd, Register rs1, int32_t offset);

@@ -11,25 +11,29 @@
 namespace rewind_ir
 {
 
-// 错误码枚举
+// error code
 enum class IRErrorCode {
     SUCCESS = 0,
     INVALID_ARGUMENT = 1,
     GENERATION_ERROR = 2,
 };
 
-// AST 转 IR
+/*
+ * two features:
+ * generate IR
+ * eval constant
+ */
 class RewindIRBuilder
 {
 public:
     IRModule build(const BaseAST& ast);
 
 private:
-    // AST 遍历和 IR 生成
+    // traverse ast and generate IR
     void lower_comp_unit(const CompUnitAST& ast, IRModule& module);
     IRFunction* lower_func_def(const FuncDefAST& ast, IRModule& module);
     const IRType* lower_func_type(const FuncTypeAST& ast, IRModule& module) const;
-    IRBasicBlock* lower_block(const BlockAST& ast, IRModule& module);
+    void lower_block(const BlockAST& ast, IRModule& module, IRBasicBlock* current_block);
     void lower_const_decl(const ConstDeclAST& ast, IRModule& module);
     void lower_var_decl(const VarDeclAST& ast, IRModule& module, IRBasicBlock* current_block);
     void lower_stmt(const StmtAST& ast, IRModule& module, IRBasicBlock* current_block);
@@ -43,7 +47,7 @@ private:
     IRValue* lower_unary_exp(const UnaryExpAST& ast, IRModule& module, IRBasicBlock* current_block);
     IRValue* lower_primary_exp(const PrimaryExpAST& ast, IRModule& module, IRBasicBlock* current_block);
 
-    // 常量表达式求值（不生成 IR，只返回 int32_t 值）
+    // eval const value, not return IR
     int32_t eval_exp(const ExpAST& ast, IRModule& module);
     int32_t eval_lor_exp(const LOrExpAST& ast, IRModule& module);
     int32_t eval_land_exp(const LAndExpAST& ast, IRModule& module);
@@ -54,17 +58,20 @@ private:
     int32_t eval_unary_exp(const UnaryExpAST& ast, IRModule& module);
     int32_t eval_primary_exp(const PrimaryExpAST& ast, IRModule& module);
 
-    // 常量获取或创建（带缓存）
+    // if constant exists, will Reuse previous constant
     IRValue* get_or_create_constant(int32_t value, IRModule& module);
 
     // make virtual register name (%0, %1, ...)
     std::string next_value_name();
+    std::string next_alloc_name(const std::string& ident);
 
     // symbol table
     SymbolTable symbol_table_;
 
     // cache: int32_t -> IRConstant*
     std::unordered_map<int32_t, IRConstant*> constant_cache_;
+    // record the number of value name
+    std::unordered_map<std::string, int> alloc_name_counter_;
 
     // virtual register number
     int value_counter_ = 0;
