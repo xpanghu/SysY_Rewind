@@ -1,6 +1,6 @@
 #pragma once
 
-#include "rewind_ir_type.h"
+#include "ir_type.h"
 #include <cassert>
 #include <memory>
 #include <string>
@@ -100,21 +100,50 @@ public:
     const T* as() const
     { return static_cast<const T*>(this); }
 
-    // 类型谓词
     bool is_binary() const
-    { return kind_ == IRValueKind::IR_BINARY; }
+    {
+        return kind_ == IRValueKind::IR_BINARY;
+    }
+
     bool is_integer() const
-    { return kind_ == IRValueKind::IR_INTEGER; }
+    {
+        return kind_ == IRValueKind::IR_INTEGER;
+    }
+
     bool is_alloc() const
-    { return kind_ == IRValueKind::IR_ALLOC; }
+    {
+        return kind_ == IRValueKind::IR_ALLOC;
+    }
+
     bool is_store() const
-    { return kind_ == IRValueKind::IR_STORE; }
+    {
+        return kind_ == IRValueKind::IR_STORE;
+    }
+
     bool is_load() const
-    { return kind_ == IRValueKind::IR_LOAD; }
+    {
+        return kind_ == IRValueKind::IR_LOAD;
+    }
+
     bool is_ret() const
-    { return kind_ == IRValueKind::IR_RETURN; }
+    {
+        return kind_ == IRValueKind::IR_RETURN;
+    }
+
     bool is_global_alloc() const
-    { return kind_ == IRValueKind::IR_GLOBALALLOC; }
+    {
+        return kind_ == IRValueKind::IR_GLOBALALLOC;
+    }
+
+    bool is_branch() const
+    {
+        return kind_ == IRValueKind::IR_BRANCH;
+    }
+
+    bool is_jump() const
+    {
+        return kind_ == IRValueKind::IR_JUMP;
+    }
 
 protected:
     IRValue() = default;
@@ -189,7 +218,7 @@ public:
 
 private:
     IRStoreInst() = default;
-    explicit IRStoreInst(IRValue* value, IRValue* dest, const std::string& name = {}) : IRInstruction(IRValueKind::IR_STORE, nullptr, name), value_(value), dest_(dest)
+    explicit IRStoreInst(IRValue* value, IRValue* dest, const IRType* ty, const std::string& name = {}) : IRInstruction(IRValueKind::IR_STORE, ty, name), value_(value), dest_(dest)
     {
     }
 };
@@ -249,7 +278,7 @@ private:
 };
 
 // example: %2 = add %0, %1
-// name represent virtual register
+// name represent inst result
 // type_ = int32
 class IRBinaryInst : public IRInstruction
 {
@@ -269,6 +298,47 @@ private:
     }
 };
 
+class IRBranchInst : public IRInstruction
+{
+    friend class IRModule;
+
+public:
+    IRValue* cond_; // binary inst / constant value / load inst
+    IRBasicBlock* if_basic_block_;
+    IRBasicBlock* else_basic_block_; // else bb or end merge bb
+
+    ~IRBranchInst() override = default;
+
+private:
+    IRBranchInst() = default;
+
+    explicit IRBranchInst(IRValue* cond, IRBasicBlock* if_block, IRBasicBlock* else_block, const IRType* ty, const std::string& name = {}) :
+        IRInstruction(IRValueKind::IR_BRANCH, ty, name),
+        cond_(cond),
+        if_basic_block_(if_block),
+        else_basic_block_(else_block)
+    {
+    }
+};
+
+class IRJumpInst : public IRInstruction
+{
+    friend class IRModule;
+
+public:
+    IRBasicBlock* jump_basic_block_;
+
+private:
+    IRJumpInst() = default;
+
+    explicit IRJumpInst(IRBasicBlock* jump_block, const IRType* ty,
+                        const std::string& name = {}) :
+        IRInstruction(IRValueKind::IR_JUMP, ty, name),
+        jump_basic_block_(jump_block)
+    {
+    }
+};
+
 // ========== IRBasicBlock ==========
 class IRBasicBlock
 {
@@ -280,7 +350,9 @@ public:
 
 private:
     IRBasicBlock() = default;
-    explicit IRBasicBlock(const std::string& name, std::vector<IRValue*> insts = {}) : name_(name), insts_(insts)
+    explicit IRBasicBlock(const std::string& name, std::vector<IRValue*> insts = {}) :
+        name_(name),
+        insts_(insts)
     {
     }
 };
@@ -302,6 +374,7 @@ private:
 };
 
 // ========== IRModule ==========
+// * const value store in RewindIRBuilder constant_cache_
 class IRModule
 {
 public:
@@ -320,7 +393,7 @@ public:
 
     void append_basic_block(IRFunction& function, IRBasicBlock& block);
 
-    void append_inst(IRBasicBlock& block, IRValue& value);
+    void append_value(IRBasicBlock& block, IRValue& value);
 
     std::vector<IRFunction*> funcs_;
     std::vector<IRValue*> global_values_;
@@ -358,12 +431,14 @@ inline T* IRModule::make_value(Args&&... args)
     return ptr;
 }
 
+// function add basic block
 inline void IRModule::append_basic_block(IRFunction& function, IRBasicBlock& block)
 {
     function.basic_blocks_.push_back(&block);
 }
 
-inline void IRModule::append_inst(IRBasicBlock& block, IRValue& value)
+// basic block add value
+inline void IRModule::append_value(IRBasicBlock& block, IRValue& value)
 {
     block.insts_.push_back(&value);
 }

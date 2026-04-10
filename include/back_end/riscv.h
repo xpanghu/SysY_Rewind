@@ -1,5 +1,6 @@
 #pragma once
 
+#include "ir_type.h"
 #include "rewind_ir.h"
 #include <cstdint>
 #include <iosfwd>
@@ -11,7 +12,7 @@ namespace riscv
 {
 
 enum class Register {
-    x0, // always zero, and
+    x0, // always zero
     ra, // save return address
     sp, // stack pointer
     t0, // t0 - t6 temporary register
@@ -43,13 +44,14 @@ public:
     }
 
 private:
-    static bool produces_stack_value(const rewind_ir::IRValue& value);
+    static bool produces_stack_value(const rewind_ir::IRValue& value); // check if inst have result value
     static int32_t alloc_size(const rewind_ir::IRAllocInst& inst);
     static int32_t align_to(int32_t value, int32_t align);
 
     int32_t next_slot_offset_ = 0;
     int32_t frame_size_ = 16; // the size of stack frame
-    int32_t ra_offset_ = 12;
+    int32_t ra_offset_ = 12;  // return address offest
+
     std::unordered_map<const rewind_ir::IRValue*, int32_t> object_slots_; // represent the stack offest of the variable
     std::unordered_map<const rewind_ir::IRValue*, int32_t> value_slots_;  // represent the stack offest of the intst result
 };
@@ -66,29 +68,40 @@ public:
     void emit_module(const rewind_ir::IRModule& module);
 
 private:
+    // IR traversal
     void emit_function(const rewind_ir::IRFunction& func);
     void emit_basic_block(const rewind_ir::IRBasicBlock& block);
     void emit_instruction(const rewind_ir::IRValue& inst);
 
+    // IR instruction lowering
     void emit_alloc(const rewind_ir::IRAllocInst& inst);
     void emit_store(const rewind_ir::IRStoreInst& inst);
     void emit_load(const rewind_ir::IRLoadInst& inst);
     void emit_binary(const rewind_ir::IRBinaryInst& inst);
+    void emit_branch(const rewind_ir::IRBranchInst& inst);
+    void emit_jump(const rewind_ir::IRJumpInst& inst);
     void emit_return(const rewind_ir::IRReturnInst& inst);
 
-    // Calculate the stack memory size of a function and aligned to 16 btypes
-    void emit_prologue();
-    void emit_epilogue();
-
+    /*
+     * if you only have a IRValue*, use materialize_value
+     * if you know the frame offset, just use emit_stack_*
+     */
+    // Operand materialization helpers
     void materialize_value(const rewind_ir::IRValue* value, Register dst);
     void materialize_pointer(const rewind_ir::IRValue* value, Register dst);
     void spill_value(const rewind_ir::IRValue* value, Register src);
 
+    // Stack frame helpers
+    void emit_prologue();
+    void emit_epilogue();
     void emit_adjust_sp(int32_t delta);
+
+    // Stack access helpers
     void emit_stack_address(Register rd, int32_t offset, Register scratch = Register::t2);
     void emit_stack_load(Register rd, int32_t offset, Register scratch = Register::t2);
     void emit_stack_store(Register rs, int32_t offset, Register scratch = Register::t2);
 
+    // Raw assembly emission
     void emit_li(Register rd, int32_t imm);
     void emit_mv(Register rd, Register rs);
     void emit_add(Register rd, Register rs1, Register rs2);
@@ -109,6 +122,8 @@ private:
     void emit_lw(Register rd, Register rs1, int32_t offset);
     void emit_sw(Register rs2, Register rs1, int32_t offset);
     void emit_ret();
+    void emit_bnez(Register rs, std::string label);
+    void emit_j(std::string label);
 
     static bool fits_i12(int32_t value);
     static const char* reg_name(Register reg);

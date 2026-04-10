@@ -4,3 +4,4 @@ tests/
 .vscode/
 .clangd
 scripts/
+.cache/

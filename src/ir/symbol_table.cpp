@@ -34,7 +34,7 @@ void SymbolTable::define_var(const std::string& name, IRValue* alloc)
 {
     auto& scope = scopes_.back();
     if (scope.count(name)) {
-        throw std::runtime_error("reddefinition of const: " + name);
+        throw std::runtime_error("redefinition of vaiable: " + name);
     }
     scope[name] = SymbolTable::Var{alloc};
 }

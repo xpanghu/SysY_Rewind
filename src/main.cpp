@@ -1,6 +1,7 @@
 #include "ast.h"
 #include "rewind_ir.h"
-#include "rewind_ir_builder.h"
+#include "ir_builder.h"
+#include "ir_text_gen.h"
 #include "riscv.h"
 #include <cassert>
 #include <cstdio>
@@ -30,18 +31,18 @@ int main(int argc, const char* argv[])
     auto ret = yyparse(ast);
     if (ret != 0 || !ast) {
         fclose(yyin);
-        throw runtime_error(
-            "yyparse failed: invalid SysY input or grammar action error");
+        throw runtime_error("yyparse failed: invalid SysY input or grammar action error");
     }
 
     ofstream out(output);
+
     // 输出解析得到的 AST
     if (std::string(mode) == "-ast") {
         ast->Dump(out);
         return 0;
     }
 
-    // ast -> rewind IR (rewind_ir 是 Koopa IR 的 C++ 形式)
+    // ast -> rewind IR
     rewind_ir::RewindIRBuilder rewind_builder;
     rewind_ir::IRModule module = rewind_builder.build(*ast);
 

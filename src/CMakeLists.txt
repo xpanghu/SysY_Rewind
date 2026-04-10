@@ -25,8 +25,9 @@ set(FRONTEND_SRCS
 
 set(IR_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/ir/symbol_table.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ir/rewind_ir_builder.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ir/rewind_ir_type.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ir/ir_builder.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ir/ir_type.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ir/ir_text_gen.cpp
 )
 
 set(BACKEND_SRCS

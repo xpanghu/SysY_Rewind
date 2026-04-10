@@ -3,9 +3,8 @@
 }
 
 %{
-
 #include "ast.h"
-// 声明 lexer函数和函数处理函数
+
 int yylex();
 void yyerror(std::unique_ptr<BaseAST> &ast, const char *s);
 extern int yylineno;
@@ -30,7 +29,7 @@ using namespace std;
 } <ast_list>
 
 // lexer 返回的所有 token 种类的声明
-%token INT RETURN CONST
+%token INT RETURN CONST IF ELSE
 %token <str_val> IDENT
 %token ADD SUB BANG MUL DIV MOD EQ NEQ GT LT GE LE AND OR
 %token <int_val> INT_CONST
@@ -38,6 +37,7 @@ using namespace std;
 // 非终结符的类型定义
 %type <ast_val> FuncDef FuncType Block Stmt Exp PrimaryExp UnaryExp AddExp MulExp LOrExp RelExp EqExp LAndExp
 %type <ast_val> Decl ConstDecl ConstDef ConstInitVal BlockItem ConstExp VarDecl VarDef InitVal
+%type <ast_val> MatchedStmt UnMatchedStmt
 %type <ast_list> ConstDefList BlockItemList VarDefList
 %type <int_val> Number
 %type <unary_op> UnaryOp
@@ -208,6 +208,15 @@ BlockItem
     ;
 
 Stmt
+    : MatchedStmt {
+        $$ = $1;
+    }
+    | UnMatchedStmt {
+        $$ = $1;
+    }
+    ;
+
+MatchedStmt
     : RETURN Exp ';' {
         auto ast = new StmtAST();
         ast->payload = StmtAST::Return { unique_ptr<BaseAST>($2) };
@@ -240,6 +249,36 @@ Stmt
     | Block {
         auto ast = new StmtAST();
         ast->payload = StmtAST::Block { unique_ptr<BaseAST>($1) };
+        $$ = ast;
+    }
+    |  IF '(' Exp ')' MatchedStmt ELSE MatchedStmt {
+        auto ast = new StmtAST();
+        ast->payload = StmtAST::SelectStmt {
+            unique_ptr<BaseAST>($3),
+            unique_ptr<BaseAST>($5),
+            unique_ptr<BaseAST>($7)
+        };
+        $$ = ast; 
+    }
+    ;
+
+UnMatchedStmt
+    : IF '(' Exp ')' Stmt {
+        auto ast = new StmtAST();
+        ast->payload = StmtAST::SelectStmt {
+            unique_ptr<BaseAST>($3),
+            unique_ptr<BaseAST>($5),
+            nullptr
+        };
+        $$ = ast;
+    }
+    | IF '(' Exp ')' MatchedStmt ELSE UnMatchedStmt {
+        auto ast = new StmtAST();
+        ast->payload = StmtAST::SelectStmt {
+            unique_ptr<BaseAST>($3),
+            unique_ptr<BaseAST>($5),
+            unique_ptr<BaseAST>($7)
+        };
         $$ = ast;
     }
     ;

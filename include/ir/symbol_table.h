@@ -15,19 +15,17 @@ class IRValue;
 class SymbolTable
 {
 private:
-    // 常量
     struct Const {
         int32_t value;
     };
 
-    // 变量
     struct Var {
-        IRValue* alloc; // alloc instruction pointer
+        IRValue* alloc;
     };
 
     using Payload = std::variant<Const, Var>;
 
-    // 作用域栈 + 常量or变量的映射
+    // Scope stack + mapping of constants or variables
     std::vector<std::unordered_map<std::string, Payload>> scopes_;
 
 public:

@@ -207,14 +207,20 @@ public:
     };
 
     struct Exp {
-        std::unique_ptr<BaseAST> exp;
+        std::unique_ptr<BaseAST> exp; // exp may be empty
     };
 
     struct Return {
-        std::unique_ptr<BaseAST> exp;
+        std::unique_ptr<BaseAST> exp; // return may be empty
     };
 
-    using Payload = std::variant<Return, Assign, Block, Exp>;
+    struct SelectStmt {
+        std::unique_ptr<BaseAST> exp;
+        std::unique_ptr<BaseAST> if_stmt;
+        std::unique_ptr<BaseAST> else_stmt;
+    };
+
+    using Payload = std::variant<Return, Assign, Block, Exp, SelectStmt>;
     Payload payload;
 
     void Dump(std::ostream& out, int indent = 0) const override;
