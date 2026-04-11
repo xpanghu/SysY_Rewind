@@ -2,8 +2,11 @@
 
 #include "rewind_ir.h"
 #include "symbol_table.h"
+#include <stdexcept>
 #include <string>
+#include <type_traits>
 #include <unordered_map>
+#include <utility>
 
 namespace rewind_ir
 {
@@ -20,6 +23,38 @@ namespace rewind_ir
 class FuncContext
 {
 public:
+    // break and continue complementary support
+    struct LoopTargets {
+        IRBasicBlock* break_target;
+        IRBasicBlock* continue_target;
+    };
+
+    void push_loop(IRBasicBlock& break_target, IRBasicBlock& continue_target)
+    {
+        loop_stack_.push_back({&break_target, &continue_target});
+    }
+
+    void pop_loop()
+    {
+        if (loop_stack_.empty()) {
+            throw std::runtime_error("loop stack is empty");
+        }
+        loop_stack_.pop_back();
+    }
+
+    bool in_loop() const
+    {
+        return !loop_stack_.empty();
+    }
+
+    LoopTargets current_loop() const
+    {
+        if (loop_stack_.empty()) {
+            throw std::runtime_error("current loop is not set");
+        }
+        return loop_stack_.back();
+    }
+
     class ScopeGuard
     {
     public:
@@ -70,7 +105,7 @@ public:
         return *current_function_;
     }
 
-    IRBasicBlock* current_block() const
+    IRBasicBlock* current_block_or_null() const
     {
         return current_block_;
     }
@@ -78,6 +113,22 @@ public:
     bool has_current_block() const
     {
         return current_block_ != nullptr;
+    }
+
+    IRBasicBlock& current_block()
+    {
+        if (current_block_ == nullptr) {
+            throw std::runtime_error("current block is not set");
+        }
+        return *current_block_;
+    }
+
+    const IRBasicBlock& current_block() const
+    {
+        if (current_block_ == nullptr) {
+            throw std::runtime_error("current block is not set");
+        }
+        return *current_block_;
     }
 
     void set_current_block(IRBasicBlock& block)
@@ -115,21 +166,70 @@ public:
         return symbols_;
     }
 
-    std::string next_value_name()
+    // %number : SSA values
+    std::string next_percent_name()
     {
         return "%" + std::to_string(value_counter_++);
     }
 
-    std::string next_alloc_name(const std::string& ident)
+    // @string : alloc/object-like names
+    std::string next_at_name(const std::string& ident)
     {
         int& counter = alloc_name_counter_[ident];
-        ++counter;
-        return "@" + ident + "_" + std::to_string(counter);
+        return "@" + ident + "_" + std::to_string(++counter);
     }
 
+    // %string : basic blocks
     std::string next_block_name(const std::string& hint)
     {
-        return "%" + hint + "_" + std::to_string(block_counter_++);
+        int& counter = block_name_counter_[hint];
+        return "%" + hint + "_" + std::to_string(++counter);
+    }
+
+    IRBasicBlock& create_function_block(const std::string& hint)
+    {
+        auto* block = module_.make_basic_block(next_block_name(hint));
+        module_.append_basic_block(current_function(), *block);
+        return *block;
+    }
+
+    template <typename T, typename... Args>
+    T& create_block_value(Args&&... args)
+    {
+        static_assert(std::is_base_of_v<IRInstruction, T>,
+                      "create_block_value<T>: T must derive from IRInstruction");
+        auto* value = module_.make_value<T>(std::forward<Args>(args)...);
+        module_.append_value(current_block(), *value);
+        return *value;
+    }
+
+    IRReturnInst& terminate_with_return(IRValue* value)
+    {
+        auto& inst = create_block_value<IRReturnInst>(value);
+        clear_current_block();
+        return inst;
+    }
+
+    IRBranchInst& terminate_with_branch(IRValue* cond,
+                                        IRBasicBlock& if_block,
+                                        IRBasicBlock& else_block)
+    {
+        auto& inst = create_block_value<IRBranchInst>(
+            cond,
+            &if_block,
+            &else_block,
+            IRTypeContext::instance().getUnit());
+        clear_current_block();
+        return inst;
+    }
+
+    IRJumpInst& terminate_with_jump(IRBasicBlock& target)
+    {
+        auto& inst = create_block_value<IRJumpInst>(
+            &target,
+            IRTypeContext::instance().getUnit());
+        clear_current_block();
+        return inst;
     }
 
 private:
@@ -138,9 +238,10 @@ private:
     IRBasicBlock* current_block_ = nullptr;
 
     SymbolTable symbols_;
+    std::vector<LoopTargets> loop_stack_;
     std::unordered_map<std::string, int> alloc_name_counter_;
+    std::unordered_map<std::string, int> block_name_counter_;
     int value_counter_ = 0;
-    int block_counter_ = 0;
 };
 
 } // namespace rewind_ir

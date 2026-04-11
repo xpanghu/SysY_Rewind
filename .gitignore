@@ -4,4 +4,4 @@ tests/
 .vscode/
 .clangd
 scripts/
-.cache/
+.cache/clangd/index

@@ -65,10 +65,10 @@ enum class IRBinaryOp {
     AND,
     OR,
     XOR,
-    LT,
-    GT,
-    LE,
-    GE,
+    LT, // <
+    GT, // >
+    LE, // <=
+    GE, // >=
     SHL,
     SHR,
     SAR,
@@ -340,6 +340,9 @@ private:
 };
 
 // ========== IRBasicBlock ==========
+/*
+ * br, jump or ret can be the basic block's termination instruction
+ */
 class IRBasicBlock
 {
     friend class IRModule;

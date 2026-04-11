@@ -29,7 +29,7 @@ using namespace std;
 } <ast_list>
 
 // lexer 返回的所有 token 种类的声明
-%token INT RETURN CONST IF ELSE
+%token INT RETURN CONST IF ELSE WHILE BREAK CONTINUE
 %token <str_val> IDENT
 %token ADD SUB BANG MUL DIV MOD EQ NEQ GT LT GE LE AND OR
 %token <int_val> INT_CONST
@@ -251,6 +251,24 @@ MatchedStmt
         ast->payload = StmtAST::Block { unique_ptr<BaseAST>($1) };
         $$ = ast;
     }
+    | WHILE '(' Exp ')' MatchedStmt {
+        auto ast = new StmtAST();
+        ast->payload = StmtAST::LoopStmt {
+           unique_ptr<BaseAST>($3),
+           unique_ptr<BaseAST>($5)
+        };
+        $$ = ast;
+    }
+    | BREAK ';' {
+        auto ast = new StmtAST();
+        ast->payload = StmtAST::LoopControlStmt{ StmtAST::LoopControlStmt::Kind::Break };
+        $$ = ast;
+    }
+    | CONTINUE ';' {
+        auto ast = new StmtAST();
+        ast->payload = StmtAST::LoopControlStmt{ StmtAST::LoopControlStmt::Kind::Continue };
+        $$ = ast;
+    }
     |  IF '(' Exp ')' MatchedStmt ELSE MatchedStmt {
         auto ast = new StmtAST();
         ast->payload = StmtAST::SelectStmt {
@@ -269,6 +287,14 @@ UnMatchedStmt
             unique_ptr<BaseAST>($3),
             unique_ptr<BaseAST>($5),
             nullptr
+        };
+        $$ = ast;
+    }
+    | WHILE '(' Exp ')' UnMatchedStmt {
+        auto ast = new StmtAST();
+        ast->payload = StmtAST::LoopStmt {
+           unique_ptr<BaseAST>($3),
+           unique_ptr<BaseAST>($5)
         };
         $$ = ast;
     }

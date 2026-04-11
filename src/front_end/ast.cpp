@@ -246,6 +246,39 @@ void StmtAST::Dump(std::ostream& out, int indent) const
                 stmt.exp->Dump(out, indent + 4);
                 out << "\n";
             }
+        } else if constexpr (std::is_same_v<T, SelectStmt>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: if\n";
+            if (stmt.exp) {
+                out << ast_dump_detail::indent(indent + 2) << "cond:\n";
+                stmt.exp->Dump(out, indent + 4);
+                out << "\n";
+            }
+            if (stmt.if_stmt) {
+                out << ast_dump_detail::indent(indent + 2) << "then:\n";
+                stmt.if_stmt->Dump(out, indent + 4);
+                out << "\n";
+            }
+            if (stmt.else_stmt) {
+                out << ast_dump_detail::indent(indent + 2) << "else:\n";
+                stmt.else_stmt->Dump(out, indent + 4);
+                out << "\n";
+            }
+        } else if constexpr (std::is_same_v<T, LoopStmt>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: while\n";
+            if (stmt.exp) {
+                out << ast_dump_detail::indent(indent + 2) << "cond:\n";
+                stmt.exp->Dump(out, indent + 4);
+                out << "\n";
+            }
+            if (stmt.body_stmt) {
+                out << ast_dump_detail::indent(indent + 2) << "body:\n";
+                stmt.body_stmt->Dump(out, indent + 4);
+                out << "\n";
+            }
+        } else if constexpr (std::is_same_v<T, LoopControlStmt>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: "
+                << (stmt.kind == StmtAST::LoopControlStmt::Kind::Break ? "break" : "continue")
+                << "\n";
         }
     },
         payload);

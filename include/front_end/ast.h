@@ -1,5 +1,6 @@
 #pragma once
 
+#include "rewind_ir.h"
 #include <iostream>
 #include <memory>
 #include <string>
@@ -220,7 +221,20 @@ public:
         std::unique_ptr<BaseAST> else_stmt;
     };
 
-    using Payload = std::variant<Return, Assign, Block, Exp, SelectStmt>;
+    struct LoopStmt {
+        std::unique_ptr<BaseAST> exp;
+        std::unique_ptr<BaseAST> body_stmt;
+    };
+
+    struct LoopControlStmt {
+        enum class Kind {
+            Break,
+            Continue
+        };
+        Kind kind;
+    };
+
+    using Payload = std::variant<Return, Assign, Block, Exp, SelectStmt, LoopStmt, LoopControlStmt>;
     Payload payload;
 
     void Dump(std::ostream& out, int indent = 0) const override;

@@ -105,28 +105,9 @@ inline int32_t eval_binary_op(BinaryOp op, int32_t a, int32_t b)
     throw std::runtime_error("unsupported BinaryOp for const eval");
 }
 
-// this function will check if block nullptr
-inline IRBasicBlock& require_current_block(FuncContext& ctx)
-{
-    auto* block = ctx.current_block();
-    if (block == nullptr) {
-        throw std::runtime_error("current block is not set");
-    }
-    return *block;
-}
-
-inline IRBasicBlock& create_function_block(FuncContext& ctx,
-                                           const std::string& hint)
-{
-    auto& module = ctx.module();
-    auto* block = module.make_basic_block(ctx.next_block_name(hint));
-    module.append_basic_block(ctx.current_function(), *block);
-    return *block;
-}
-
 } // namespace
 
-// 定义了 overloaded 结构体，配套 std::variant 使用
+// Overloaded struct defined for use with std::variant
 template <class... Ts>
 struct overloaded : Ts... {
     using Ts::operator()...;
@@ -175,7 +156,7 @@ IRFunction* RewindIRBuilder::lower_func_def(const FuncDefAST& ast,
 
     // Initialize entry block
     // magic string "%entry"
-    auto& basic_block = create_function_block(ctx, "entry");
+    auto& basic_block = ctx.create_function_block("entry");
     ctx.set_current_block(basic_block);
 
     const auto& block = expect_node<BlockAST>(*ast.block, "BlockAST");
@@ -206,7 +187,7 @@ void RewindIRBuilder::lower_block(const BlockAST& ast, FuncContext& ctx)
         if (auto* stmt = dynamic_cast<StmtAST*>(item.get())) {
             lower_stmt(*stmt, ctx);
         }
-        // 处理常量和变量
+        // lower variable and const
         if (auto* decl = dynamic_cast<DeclAST*>(item.get())) {
             if (auto* const_decl = dynamic_cast<ConstDeclAST*>(decl->const_or_var.get())) {
                 lower_const_decl(*const_decl, ctx);
@@ -227,17 +208,16 @@ void RewindIRBuilder::lower_const_decl(const ConstDeclAST& ast, FuncContext& ctx
                                                         "ConstInitValAST");
         const auto& exp = expect_node<ExpAST>(*init.const_exp, "ExpAST");
 
-        // 求值常量表达式
+        // eval const exp
         int32_t value = eval_exp(exp, ctx);
 
-        // 定义常量
+        // define const
         ctx.symbols().define_const(def.ident, value);
     }
 }
 
 void RewindIRBuilder::lower_var_decl(const VarDeclAST& ast, FuncContext& ctx)
 {
-    auto& module = ctx.module();
     auto* i32_ptr_type = get_pointer_type(get_i32_type());
 
     for (const auto& def_base : ast.var_defs) {
@@ -246,18 +226,16 @@ void RewindIRBuilder::lower_var_decl(const VarDeclAST& ast, FuncContext& ctx)
             overloaded{
                 // int x;
                 [&](const VarDefAST::DefEmpty& def) {
-                    auto& current_block = require_current_block(ctx);
-                    auto alloc = module.make_value<IRAllocInst>(i32_ptr_type, ctx.next_alloc_name(def.ident));
-                    module.append_value(current_block, *alloc);
-                    ctx.symbols().define_var(def.ident, alloc);
+                    auto& alloc = ctx.create_block_value<IRAllocInst>(
+                        i32_ptr_type, ctx.next_at_name(def.ident));
+                    ctx.symbols().define_var(def.ident, &alloc);
                 },
                 // int x = 10;
                 [&](const VarDefAST::DefValue& def) {
                     // @ident = alloc i32
-                    auto& current_block = require_current_block(ctx);
-                    auto alloc = module.make_value<IRAllocInst>(i32_ptr_type, ctx.next_alloc_name(def.ident));
-                    module.append_value(current_block, *alloc);
-                    ctx.symbols().define_var(def.ident, alloc);
+                    auto& alloc = ctx.create_block_value<IRAllocInst>(
+                        i32_ptr_type, ctx.next_at_name(def.ident));
+                    ctx.symbols().define_var(def.ident, &alloc);
 
                     // lower exp
                     // store exp_value, @ident
@@ -265,9 +243,8 @@ void RewindIRBuilder::lower_var_decl(const VarDeclAST& ast, FuncContext& ctx)
                     const auto& exp = expect_node<ExpAST>(*init_val.exp, "ExpAST");
                     auto exp_value = lower_exp(exp, ctx);
 
-                    auto store = module.make_value<IRStoreInst>(exp_value, alloc, get_unit_type());
-                    auto& store_block = require_current_block(ctx);
-                    module.append_value(store_block, *store);
+                    static_cast<void>(ctx.create_block_value<IRStoreInst>(
+                        exp_value, &alloc, get_unit_type()));
                 }
 
             },
@@ -277,7 +254,6 @@ void RewindIRBuilder::lower_var_decl(const VarDeclAST& ast, FuncContext& ctx)
 
 void RewindIRBuilder::lower_stmt(const StmtAST& ast, FuncContext& ctx)
 {
-    auto& module = ctx.module();
     std::visit(
         overloaded{
             [&](const StmtAST::Return& ret_stmt) {
@@ -290,12 +266,7 @@ void RewindIRBuilder::lower_stmt(const StmtAST& ast, FuncContext& ctx)
                     ret_value = lower_exp(exp, ctx);
                 }
 
-                // def return inst
-                auto ret_inst = module.make_value<IRReturnInst>(ret_value);
-                auto& current_block = require_current_block(ctx);
-                module.append_value(current_block, *ret_inst);
-
-                ctx.clear_current_block();
+                static_cast<void>(ctx.terminate_with_return(ret_value));
             },
             [&](const StmtAST::Assign& assign_stmt) {
                 // assign
@@ -312,9 +283,8 @@ void RewindIRBuilder::lower_stmt(const StmtAST& ast, FuncContext& ctx)
                 }
 
                 auto alloc = std::get<IRValue*>(*value);
-                auto store_inst = module.make_value<IRStoreInst>(exp_inst, alloc, get_unit_type());
-                auto& current_block = require_current_block(ctx);
-                module.append_value(current_block, *store_inst);
+                static_cast<void>(ctx.create_block_value<IRStoreInst>(
+                    exp_inst, alloc, get_unit_type()));
             },
             [&](const StmtAST::Block& block_stmt) {
                 const auto& block = expect_node<BlockAST>(*block_stmt.block, "BlockAST");
@@ -335,64 +305,127 @@ void RewindIRBuilder::lower_stmt(const StmtAST& ast, FuncContext& ctx)
                 const StmtAST* else_stmt = select_stmt.else_stmt ? &expect_node<StmtAST>(*select_stmt.else_stmt, "StmtAST") : nullptr;
 
                 // condition value
-                auto* cond_value = lower_exp(exp, ctx);
-                auto& current_block = require_current_block(ctx);
+                auto* cond = lower_exp(exp, ctx);
 
                 // def if_basic_block, else_basic_block  merge_basic_block
-                auto& then_bb = create_function_block(ctx, "then");
+                auto& then_bb = ctx.create_function_block("then");
                 IRBasicBlock* else_bb = nullptr;
                 if (else_stmt != nullptr) {
-                    else_bb = &create_function_block(ctx, "else");
+                    else_bb = &ctx.create_function_block("else");
                 }
+
                 IRBasicBlock* merge_bb = nullptr;
                 if (else_stmt == nullptr) {
-                    merge_bb = &create_function_block(ctx, "end");
+                    merge_bb = &ctx.create_function_block("end");
                 }
 
                 // current_block add branch inst
-                auto* branch = module.make_value<IRBranchInst>(
-                    cond_value,
-                    &then_bb,
-                    else_stmt != nullptr ? else_bb : merge_bb,
-                    get_unit_type());
-                module.append_value(current_block, *branch);
+                static_cast<void>(ctx.terminate_with_branch(
+                    cond,
+                    then_bb,
+                    *(else_stmt != nullptr ? else_bb : merge_bb)));
 
-                // switch if_basic_block
+                // switch then_bb
                 ctx.set_current_block(then_bb);
                 lower_stmt(if_stmt, ctx);
-                IRBasicBlock* then_fallthrough = ctx.current_block();
-                // through then_fallthrough decide if add the jump inst
+                IRBasicBlock* then_fallthrough = ctx.current_block_or_null();
+
+                // check if then_bb terminated
                 // consider example : if ( exp ) return exp;  don't need jump inst
                 if (then_fallthrough != nullptr) {
                     if (merge_bb == nullptr) {
-                        merge_bb = &create_function_block(ctx, "end");
+                        merge_bb = &ctx.create_function_block("end");
                     }
-                    auto* jump = module.make_value<IRJumpInst>(merge_bb,
-                                                               get_unit_type());
-                    module.append_value(*then_fallthrough, *jump);
+                    ctx.set_current_block(*then_fallthrough);
+                    static_cast<void>(ctx.terminate_with_jump(*merge_bb));
                 }
 
                 // switch else_basic_block
-                IRBasicBlock* else_fallthrough = nullptr;
                 if (else_stmt != nullptr) {
                     ctx.set_current_block(*else_bb);
                     lower_stmt(*else_stmt, ctx);
-                    else_fallthrough = ctx.current_block();
+                    IRBasicBlock* else_fallthrough = ctx.current_block_or_null();
+
+                    // check if else_basic_block terminated
                     if (else_fallthrough != nullptr) {
                         if (merge_bb == nullptr) {
-                            merge_bb = &create_function_block(ctx, "end");
+                            merge_bb = &ctx.create_function_block("end");
                         }
-                        auto* jump = module.make_value<IRJumpInst>(merge_bb,
-                                                                   get_unit_type());
-                        module.append_value(*else_fallthrough, *jump);
+                        ctx.set_current_block(*else_fallthrough);
+                        static_cast<void>(ctx.terminate_with_jump(*merge_bb));
                     }
                 }
 
-                // merge exists iff at least one path continues, or if without else
+                // if_bb and else_bb all terminate, don't need merge_bb
+                // this way can prevent emtpy merge_bb
                 if (merge_bb != nullptr) {
                     ctx.set_current_block(*merge_bb);
                 } else {
                     ctx.clear_current_block();
+                }
+            },
+            [&](const StmtAST::LoopStmt& loop_stmt) {
+                const auto& exp = expect_node<ExpAST>(*loop_stmt.exp, "ExpAST");
+                const auto& body_stmt = expect_node<StmtAST>(*loop_stmt.body_stmt, "StmtAST");
+
+                auto& while_entry = ctx.create_function_block("while_entry");
+                auto& while_body = ctx.create_function_block("while_body");
+                auto& end = ctx.create_function_block("end");
+
+                // preheader -> while_entry
+                static_cast<void>(ctx.terminate_with_jump(while_entry));
+
+                // while_entry:
+                //   evaluate condition
+                //   br cond, while_body, end
+                ctx.set_current_block(while_entry);
+                auto* cond = lower_exp(exp, ctx);
+                static_cast<void>(ctx.terminate_with_branch(
+                    cond,
+                    while_body,
+                    end));
+
+                // record break and continue basic block
+                ctx.push_loop(end, while_entry);
+
+                // while_body:
+                //   lower body
+                //   if body still falls through, jump back to while_entry
+                ctx.set_current_block(while_body);
+                lower_stmt(body_stmt, ctx);
+
+                // check if while_body is terminated
+                auto* body_fallthrough = ctx.current_block_or_null();
+                if (body_fallthrough != nullptr) {
+                    ctx.set_current_block(*body_fallthrough);
+                    static_cast<void>(ctx.terminate_with_jump(while_entry));
+                }
+
+                // exit loop
+                ctx.pop_loop();
+
+                // end:
+                //   subsequent statements continue here
+                ctx.set_current_block(end);
+            },
+            [&](const StmtAST::LoopControlStmt& control_stmt) {
+                if (!ctx.in_loop()) {
+                    if (control_stmt.kind == StmtAST::LoopControlStmt::Kind::Break) {
+                        throw std::runtime_error("break used outside while");
+                    } else {
+                        throw std::runtime_error("continue used outside while");
+                    }
+                }
+
+                switch (control_stmt.kind) {
+                case StmtAST::LoopControlStmt::Kind::Break: {
+                    ctx.terminate_with_jump(*ctx.current_loop().break_target);
+                    break;
+                }
+                case StmtAST::LoopControlStmt::Kind::Continue: {
+                    ctx.terminate_with_jump(*ctx.current_loop().continue_target);
+                    break;
+                }
                 }
             },
             [&](const auto& other) {
@@ -413,6 +446,24 @@ IRValue* RewindIRBuilder::lower_exp(const ExpAST& ast, FuncContext& ctx)
 
 // a || b == !(a || b)
 // Short-circuit evaluation
+/*
+ * current basic block
+ * lower lhs
+ * alloc result
+ * lhs_bool : lhs != 0
+ * br lhs_bool short_true rhs_bb
+ *
+ * short_true basic block
+ * store 1 tmp
+ * jump merge
+ *
+ * rhs_bb basic block
+ * store rhs_value result
+ * jump merge
+ *
+ * merge basic block
+ * % = load result
+ */
 IRValue* RewindIRBuilder::lower_lor_exp(const LOrExpAST& ast, FuncContext& ctx)
 {
     auto& module = ctx.module();
@@ -429,75 +480,63 @@ IRValue* RewindIRBuilder::lower_lor_exp(const LOrExpAST& ast, FuncContext& ctx)
                 const auto& land_exp =
                     expect_node<LAndExpAST>(*binary.land_exp, "LAndExpAST");
 
-                // eval lhs
+                auto& short_true = ctx.create_function_block("short_true");
+                auto& rhs_bb = ctx.create_function_block("rhs_basic_block");
+                auto& merge = ctx.create_function_block("merge");
+
+                // lower lhs
                 auto* lhs = lower_lor_exp(lor_exp, ctx);
-                auto& current_block = require_current_block(ctx);
-
-                auto* result_slot = module.make_value<IRAllocInst>(
+                // @result = alloc i32
+                auto& result_slot = ctx.create_block_value<IRAllocInst>(
                     get_pointer_type(get_i32_type()),
-                    ctx.next_alloc_name("lor_tmp"));
-                module.append_value(current_block, *result_slot);
+                    ctx.next_at_name("lor_tmp"));
 
-                auto& short_true = create_function_block(ctx, "short_true");
-                auto& rhs_bb = create_function_block(ctx, "rhs_basic_block");
-                auto& merge = create_function_block(ctx, "merge");
-
+                // lhs_bool : lhs != 0
                 auto* zero = get_or_create_constant(0, module);
-                auto* lhs_bool = module.make_value<IRBinaryInst>(
+                auto& lhs_bool = ctx.create_block_value<IRBinaryInst>(
                     IRBinaryOp::NEQ,
                     lhs,
                     zero,
                     get_i32_type(),
-                    ctx.next_value_name());
-                module.append_value(current_block, *lhs_bool);
-                auto* branch = module.make_value<IRBranchInst>(
-                    lhs_bool,
-                    &short_true,
-                    &rhs_bb,
-                    get_unit_type());
-                module.append_value(current_block, *branch);
+                    ctx.next_percent_name());
 
-                // short_true basic block
+                // br lhs_bool short_true rhs_bb
+                static_cast<void>(ctx.terminate_with_branch(
+                    &lhs_bool,
+                    short_true,
+                    rhs_bb));
+
+                // * short_true basic block
                 ctx.set_current_block(short_true);
-                auto& short_true_block = require_current_block(ctx);
-                auto* one = get_or_create_constant(1, module);
-                auto* store_true =
-                    module.make_value<IRStoreInst>(one, result_slot, get_unit_type());
-                module.append_value(short_true_block, *store_true);
-                auto* jump_true =
-                    module.make_value<IRJumpInst>(&merge, get_unit_type());
-                module.append_value(short_true_block, *jump_true);
 
-                // rhs_bb basic block
+                // store 1 result
+                // jump merge
+                auto* one = get_or_create_constant(1, module);
+                static_cast<void>(ctx.create_block_value<IRStoreInst>(
+                    one, &result_slot, get_unit_type()));
+                static_cast<void>(ctx.terminate_with_jump(merge));
+
+                // * rhs_bb basic block
                 ctx.set_current_block(rhs_bb);
-                // eval rhs
+                // lower rhs
                 auto* rhs = lower_land_exp(land_exp, ctx);
-                auto& rhs_block = require_current_block(ctx);
-                auto* rhs_bool = module.make_value<IRBinaryInst>(
+                auto& rhs_bool = ctx.create_block_value<IRBinaryInst>(
                     IRBinaryOp::NEQ,
                     rhs,
                     zero,
                     get_i32_type(),
-                    ctx.next_value_name());
-                module.append_value(rhs_block, *rhs_bool);
+                    ctx.next_percent_name());
 
-                // store rhs_bool, tmp
+                // store rhs_bool, result
                 // jump merge
-                auto* store_rhs =
-                    module.make_value<IRStoreInst>(rhs_bool, result_slot, get_unit_type());
-                module.append_value(rhs_block, *store_rhs);
-                auto* jump_rhs =
-                    module.make_value<IRJumpInst>(&merge, get_unit_type());
-                module.append_value(rhs_block, *jump_rhs);
+                static_cast<void>(ctx.create_block_value<IRStoreInst>(
+                    &rhs_bool, &result_slot, get_unit_type()));
+                static_cast<void>(ctx.terminate_with_jump(merge));
 
                 // merge basic block
                 ctx.set_current_block(merge);
-                auto& merge_block = require_current_block(ctx);
-                auto* result =
-                    module.make_value<IRLoadInst>(result_slot, get_i32_type(),
-                                                  ctx.next_value_name());
-                module.append_value(merge_block, *result);
-                return result;
+                return &ctx.create_block_value<IRLoadInst>(
+                    &result_slot, get_i32_type(), ctx.next_percent_name());
             }},
         ast.payload);
 }
@@ -520,102 +559,82 @@ IRValue* RewindIRBuilder::lower_land_exp(const LAndExpAST& ast,
 
                 // eval lhs
                 auto lhs = lower_land_exp(land_exp, ctx);
-                auto& current_block = require_current_block(ctx);
-
-                auto* result_slot = module.make_value<IRAllocInst>(
+                auto& result_slot = ctx.create_block_value<IRAllocInst>(
                     get_pointer_type(get_i32_type()),
-                    ctx.next_alloc_name("land_tmp"));
-                module.append_value(current_block, *result_slot);
+                    ctx.next_at_name("land_tmp"));
 
-                auto& short_false = create_function_block(ctx, "short_false");
-                auto& rhs_bb = create_function_block(ctx, "rhs_basic_block");
-                auto& merge = create_function_block(ctx, "merge");
+                // initialization basic_block
+                auto& short_false = ctx.create_function_block("short_false");
+                auto& rhs_bb = ctx.create_function_block("rhs_basic_block");
+                auto& merge = ctx.create_function_block("merge");
 
                 auto* zero = get_or_create_constant(0, module);
-                auto* lhs_bool = module.make_value<IRBinaryInst>(
+                auto& lhs_bool = ctx.create_block_value<IRBinaryInst>(
                     IRBinaryOp::NEQ,
                     lhs,
                     zero,
                     get_i32_type(),
-                    ctx.next_value_name());
-                module.append_value(current_block, *lhs_bool);
-                auto* branch = module.make_value<IRBranchInst>(
-                    lhs_bool,
-                    &rhs_bb,
-                    &short_false,
-                    get_unit_type());
-                module.append_value(current_block, *branch);
+                    ctx.next_percent_name());
+                static_cast<void>(ctx.terminate_with_branch(
+                    &lhs_bool,
+                    rhs_bb,
+                    short_false));
 
-                // short_false basic block
+                // * short_false basic block
                 ctx.set_current_block(short_false);
-                auto& short_false_block = require_current_block(ctx);
                 auto* zero_value = get_or_create_constant(0, module);
-                auto* store_false =
-                    module.make_value<IRStoreInst>(zero_value, result_slot, get_unit_type());
-                module.append_value(short_false_block, *store_false);
-                auto* jump_false =
-                    module.make_value<IRJumpInst>(&merge, get_unit_type());
-                module.append_value(short_false_block, *jump_false);
+                // store 0 result
+                // jump merge
+                static_cast<void>(ctx.create_block_value<IRStoreInst>(
+                    zero_value, &result_slot, get_unit_type()));
+                static_cast<void>(ctx.terminate_with_jump(merge));
 
-                // rhs_bb basic block
+                // * rhs_bb basic block
                 ctx.set_current_block(rhs_bb);
                 // eval rhs
                 auto* rhs = lower_eq_exp(eq_exp, ctx);
-                auto& rhs_block = require_current_block(ctx);
-                auto* rhs_bool = module.make_value<IRBinaryInst>(
+                auto& rhs_bool = ctx.create_block_value<IRBinaryInst>(
                     IRBinaryOp::NEQ,
                     rhs,
                     zero,
                     get_i32_type(),
-                    ctx.next_value_name());
-                module.append_value(rhs_block, *rhs_bool);
+                    ctx.next_percent_name());
 
-                // store rhs_bool, tmp
+                // store rhs_bool, result
                 // jump merge
-                auto* store_rhs =
-                    module.make_value<IRStoreInst>(rhs_bool, result_slot, get_unit_type());
-                module.append_value(rhs_block, *store_rhs);
-                auto* jump_rhs =
-                    module.make_value<IRJumpInst>(&merge, get_unit_type());
-                module.append_value(rhs_block, *jump_rhs);
+                static_cast<void>(ctx.create_block_value<IRStoreInst>(
+                    &rhs_bool, &result_slot, get_unit_type()));
+                static_cast<void>(ctx.terminate_with_jump(merge));
 
                 // merge basic block
+                // % = load @result
                 ctx.set_current_block(merge);
-                auto& merge_block = require_current_block(ctx);
-                auto* result =
-                    module.make_value<IRLoadInst>(result_slot, get_i32_type(),
-                                                  ctx.next_value_name());
-                module.append_value(merge_block, *result);
-                return result;
+                return &ctx.create_block_value<IRLoadInst>(
+                    &result_slot, get_i32_type(), ctx.next_percent_name());
             }},
         ast.payload);
 }
 
 IRValue* RewindIRBuilder::lower_eq_exp(const EqExpAST& ast, FuncContext& ctx)
 {
-    auto& module = ctx.module();
     return std::visit(
         overloaded{
-            [&](const EqExpAST::Simple& s) -> IRValue* {
+            [&](const EqExpAST::Simple& simple) -> IRValue* {
                 const auto& rel_exp =
-                    expect_node<RelExpAST>(*s.rel_exp, "RelExpAST");
+                    expect_node<RelExpAST>(*simple.rel_exp, "RelExpAST");
                 return lower_rel_exp(rel_exp, ctx);
             },
-            [&](const EqExpAST::Binary& b) -> IRValue* {
+            [&](const EqExpAST::Binary& binary) -> IRValue* {
                 const auto& eq_exp =
-                    expect_node<EqExpAST>(*b.eq_exp, "EqExpAST");
+                    expect_node<EqExpAST>(*binary.eq_exp, "EqExpAST");
                 const auto& rel_exp =
-                    expect_node<RelExpAST>(*b.rel_exp, "RelExpAST");
+                    expect_node<RelExpAST>(*binary.rel_exp, "RelExpAST");
 
                 auto lhs = lower_eq_exp(eq_exp, ctx);
                 auto rhs = lower_rel_exp(rel_exp, ctx);
-                auto& current_block = require_current_block(ctx);
-
-                auto op = ast_op_to_ir_op(b.op);
-                auto value = module.make_value<IRBinaryInst>(op,
-                                                             lhs, rhs, get_i32_type(), ctx.next_value_name());
-                module.append_value(current_block, *value);
-                return value;
+                auto op = ast_op_to_ir_op(binary.op);
+                return &ctx.create_block_value<IRBinaryInst>(
+                    op, lhs, rhs, get_i32_type(), ctx.next_percent_name());
             }},
         ast.payload);
 }
@@ -623,7 +642,6 @@ IRValue* RewindIRBuilder::lower_eq_exp(const EqExpAST& ast, FuncContext& ctx)
 IRValue* RewindIRBuilder::lower_rel_exp(const RelExpAST& ast,
                                         FuncContext& ctx)
 {
-    auto& module = ctx.module();
     return std::visit(
         overloaded{
             [&](const RelExpAST::Simple& simple) -> IRValue* {
@@ -639,13 +657,9 @@ IRValue* RewindIRBuilder::lower_rel_exp(const RelExpAST& ast,
 
                 auto lhs = lower_rel_exp(rel_exp, ctx);
                 auto rhs = lower_add_exp(add_exp, ctx);
-                auto& current_block = require_current_block(ctx);
-
                 auto op = ast_op_to_ir_op(binary.op);
-                auto value = module.make_value<IRBinaryInst>(op, lhs, rhs, get_i32_type(), ctx.next_value_name());
-
-                module.append_value(current_block, *value);
-                return value;
+                return &ctx.create_block_value<IRBinaryInst>(
+                    op, lhs, rhs, get_i32_type(), ctx.next_percent_name());
             }},
         ast.payload);
 }
@@ -653,7 +667,6 @@ IRValue* RewindIRBuilder::lower_rel_exp(const RelExpAST& ast,
 IRValue* RewindIRBuilder::lower_add_exp(const AddExpAST& ast,
                                         FuncContext& ctx)
 {
-    auto& module = ctx.module();
     return std::visit(
         overloaded{
             [&](const AddExpAST::Simple& s) -> IRValue* {
@@ -669,13 +682,10 @@ IRValue* RewindIRBuilder::lower_add_exp(const AddExpAST& ast,
 
                 auto lhs = lower_add_exp(add_exp, ctx);
                 auto rhs = lower_mul_exp(mul_exp, ctx);
-                auto& current_block = require_current_block(ctx);
-
                 auto op = ast_op_to_ir_op(b.op);
-                auto value = module.make_value<IRBinaryInst>(op, lhs, rhs, get_i32_type(), ctx.next_value_name());
 
-                module.append_value(current_block, *value);
-                return value;
+                return &ctx.create_block_value<IRBinaryInst>(
+                    op, lhs, rhs, get_i32_type(), ctx.next_percent_name());
             }},
         ast.payload);
 }
@@ -683,7 +693,6 @@ IRValue* RewindIRBuilder::lower_add_exp(const AddExpAST& ast,
 IRValue* RewindIRBuilder::lower_mul_exp(const MulExpAST& ast,
                                         FuncContext& ctx)
 {
-    auto& module = ctx.module();
     return std::visit(
         overloaded{
             [&](const MulExpAST::Simple& s) -> IRValue* {
@@ -699,13 +708,9 @@ IRValue* RewindIRBuilder::lower_mul_exp(const MulExpAST& ast,
 
                 auto lhs = lower_mul_exp(mul_exp, ctx);
                 auto rhs = lower_unary_exp(unary_exp, ctx);
-                auto& current_block = require_current_block(ctx);
-
                 auto op = ast_op_to_ir_op(b.op);
-                auto value = module.make_value<IRBinaryInst>(op, lhs, rhs, get_i32_type(), ctx.next_value_name());
-
-                module.append_value(current_block, *value);
-                return value;
+                return &ctx.create_block_value<IRBinaryInst>(
+                    op, lhs, rhs, get_i32_type(), ctx.next_percent_name());
             }},
         ast.payload);
 }
@@ -722,27 +727,23 @@ IRValue* RewindIRBuilder::lower_unary_exp(const UnaryExpAST& ast,
                 return lower_primary_exp(primary, ctx);
             },
             [&](const UnaryExpAST::Unary& unary) -> IRValue* {
-                // u.exp 可能是另一个 UnaryExpAST（嵌套一元运算）或 PrimaryExpAST
                 const auto& unary_exp = expect_node<UnaryExpAST>(*unary.exp, "UnaryExpAST");
                 auto operand = lower_unary_exp(unary_exp, ctx);
-                auto& current_block = require_current_block(ctx);
 
-                // 一元运算符转换为二元运算
+                //
                 auto zero = get_or_create_constant(0, module);
                 switch (unary.op) {
                 case UnaryOp::PLUS:
                     return operand; // +x = x
                 case UnaryOp::MINUS: {
-                    auto value = module.make_value<IRBinaryInst>(IRBinaryOp::SUB,
-                                                                 zero, operand, get_i32_type(), ctx.next_value_name());
-                    module.append_value(current_block, *value);
-                    return value;
+                    return &ctx.create_block_value<IRBinaryInst>(
+                        IRBinaryOp::SUB, zero, operand, get_i32_type(),
+                        ctx.next_percent_name());
                 }
                 case UnaryOp::NOT: {
-                    auto value = module.make_value<IRBinaryInst>(IRBinaryOp::EQ,
-                                                                 operand, zero, get_i32_type(), ctx.next_value_name());
-                    module.append_value(current_block, *value);
-                    return value;
+                    return &ctx.create_block_value<IRBinaryInst>(
+                        IRBinaryOp::EQ, operand, zero, get_i32_type(),
+                        ctx.next_percent_name());
                 }
                 }
                 throw std::runtime_error("invalid UnaryOp");
@@ -754,7 +755,6 @@ IRValue* RewindIRBuilder::lower_primary_exp(const PrimaryExpAST& ast,
                                             FuncContext& ctx)
 {
     auto& module = ctx.module();
-    auto& current_block = require_current_block(ctx);
     return std::visit(
         overloaded{
             [&](const PrimaryExpAST::Number& number) -> IRValue* {
@@ -770,12 +770,13 @@ IRValue* RewindIRBuilder::lower_primary_exp(const PrimaryExpAST& ast,
                 if (sym) {
                     const auto& value = *sym;
                     if (std::holds_alternative<int32_t>(value)) {
+                        // const
                         return get_or_create_constant(std::get<int32_t>(value), module);
                     } else {
+                        // variable
                         IRValue* alloc = std::get<IRValue*>(value);
-                        auto load = module.make_value<IRLoadInst>(alloc, get_i32_type(), ctx.next_value_name());
-                        module.append_value(current_block, *load);
-                        return load;
+                        return &ctx.create_block_value<IRLoadInst>(
+                            alloc, get_i32_type(), ctx.next_percent_name());
                     }
                 }
 
