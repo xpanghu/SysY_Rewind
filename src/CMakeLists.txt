@@ -13,7 +13,7 @@ FLEX_TARGET(Lexer ${CMAKE_CURRENT_SOURCE_DIR}/front_end/sysy.l
 BISON_TARGET(Parser ${CMAKE_CURRENT_SOURCE_DIR}/front_end/sysy.y
     ${CMAKE_CURRENT_BINARY_DIR}/front_end/sysy.tab.cpp COMPILE_FLAGS "-d")
 
-# 建立依赖关系，确保Flex在Bison之前运行
+# 建立依赖关系，Parser输出就绪后，Lexer再构建
 # Bison 生成的 sysy.tab.hpp 可能被 Flex 生成的代码使用
 # 如果没有这个依赖，并行构建时可能出错
 ADD_FLEX_BISON_DEPENDENCY(Lexer Parser)
@@ -48,6 +48,19 @@ add_executable(compiler
     ${BACKEND_SRCS}
     ${GENERATED_SRCS}
 )
+
+# add sysy_runtime library
+set(SYSY_RUNTIME_LIB ${PROJECT_SOURCE_DIR}/third_party/sysyrt/libsysy.a)
+if(NOT EXISTS ${SYSY_RUNTIME_LIB})
+    message(FATAL_ERROR "missing SysY runtime library: ${SYSY_RUNTIME_LIB}")
+endif()
+
+add_library(sysy_runtime STATIC IMPORTED GLOBAL)
+set_target_properties(sysy_runtime PROPERTIES
+    IMPORTED_LOCATION ${SYSY_RUNTIME_LIB}
+)
+
+target_link_libraries(compiler PRIVATE sysy_runtime)
 
 # 添加所有 include 目录到目标
 target_include_directories(compiler PUBLIC

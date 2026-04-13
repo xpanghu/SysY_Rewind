@@ -20,6 +20,7 @@ void SymbolTable::exit_scope()
     scopes_.pop_back();
 }
 
+// define const
 void SymbolTable::define_const(const std::string& name, int32_t value)
 {
     auto& scope = scopes_.back();
@@ -32,18 +33,21 @@ void SymbolTable::define_const(const std::string& name, int32_t value)
 // define variable
 void SymbolTable::define_var(const std::string& name, IRValue* alloc)
 {
+    if (alloc == nullptr) {
+        throw std::runtime_error("define_var: null alloc");
+    }
     auto& scope = scopes_.back();
     if (scope.count(name)) {
-        throw std::runtime_error("redefinition of vaiable: " + name);
+        throw std::runtime_error("redefinition of variable: " + name);
     }
     scope[name] = SymbolTable::Var{alloc};
 }
 
 // Search by variable name
 // 1. return int32_t represent const
-// 2. return IRValue* represent variable (alloc instruction)
+// 2. return IRValue* represent variable
 // 3. return nullopt represent not exist
-std::optional<std::variant<int32_t, IRValue*>> SymbolTable::lookup(const std::string& name) const
+std::optional<std::variant<int32_t, IRValue*>> SymbolTable::lookup_value(const std::string& name) const
 {
     for (auto it = scopes_.rbegin(); it != scopes_.rend(); ++it) {
         if (auto found = it->find(name); found != it->end()) {
@@ -58,5 +62,25 @@ std::optional<std::variant<int32_t, IRValue*>> SymbolTable::lookup(const std::st
     }
 
     return std::nullopt;
+}
+
+void SymbolTable::define_function(const std::string& name, IRFunction* func)
+{
+    if (func == nullptr) {
+        throw std::runtime_error("define_function: null function");
+    }
+    if (func_table_.count(name)) {
+        throw std::runtime_error("redefinition of function: " + name);
+    }
+    func_table_[name] = func;
+}
+
+IRFunction* SymbolTable::lookup_function(const std::string& name) const
+{
+    auto it = func_table_.find(name);
+    if (it == func_table_.end()) {
+        return nullptr;
+    }
+    return it->second;
 }
 } // namespace rewind_ir

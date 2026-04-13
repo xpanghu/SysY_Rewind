@@ -33,7 +33,7 @@ public:
 
 private:
     void print_global_value(const IRValue* value, std::ostream& out);
-    void print_function(const IRFunction* func, std::ostream& out);
+    void print_function(const IRFunction* previous, const IRFunction* current, std::ostream& out);
     void print_basic_block(const IRBasicBlock* block, std::ostream& out);
     void print_instruction(const IRValue* inst, std::ostream& out);
     void print_value(const IRValue* value, std::ostream& out);

@@ -12,9 +12,9 @@ extern int yylineno;
 using namespace std;
 %}
 
-%parse-param { std::unique_ptr<BaseAST> &ast}
+%parse-param { std::unique_ptr<BaseAST> &ast }
 
-// union不可以存在非平凡类型（std::string）
+// union不可以存在非平凡类型 (std::string, std::unique_ptr)
 %union {
     std::string *str_val;
     int int_val;
@@ -24,49 +24,111 @@ using namespace std;
     std::vector<std::unique_ptr<BaseAST>> *ast_list;
 }
 
+// %destructor 是给 parser 错误路径补内存回收
 %destructor {
     delete $$;
 } <ast_list>
 
 // lexer 返回的所有 token 种类的声明
-%token INT RETURN CONST IF ELSE WHILE BREAK CONTINUE
+%token INT RETURN CONST IF ELSE WHILE BREAK CONTINUE VOID
 %token <str_val> IDENT
 %token ADD SUB BANG MUL DIV MOD EQ NEQ GT LT GE LE AND OR
 %token <int_val> INT_CONST
 
 // 非终结符的类型定义
-%type <ast_val> FuncDef FuncType Block Stmt Exp PrimaryExp UnaryExp AddExp MulExp LOrExp RelExp EqExp LAndExp
+%type <ast_val> CompUnitItem FuncDef Block Stmt Exp PrimaryExp UnaryExp AddExp MulExp LOrExp RelExp EqExp LAndExp
 %type <ast_val> Decl ConstDecl ConstDef ConstInitVal BlockItem ConstExp VarDecl VarDef InitVal
-%type <ast_val> MatchedStmt UnMatchedStmt
-%type <ast_list> ConstDefList BlockItemList VarDefList
+%type <ast_val> MatchedStmt UnMatchedStmt FuncFParam FuncRParams
+%type <ast_list> ConstDefList BlockItemList VarDefList CompUnitItemList FuncFParamList ExpList
 %type <int_val> Number
 %type <unary_op> UnaryOp
 %type <binary_op> AddOp MulOp RelOp EqOp
+
 %%
 
 CompUnit
-    : FuncDef {
-        auto comp_unit = make_unique<CompUnitAST>();
-        comp_unit->func_def = unique_ptr<BaseAST>($1);
-        ast = std::move(comp_unit); 
+    : CompUnitItemList {
+        auto comp = make_unique<CompUnitAST>();
+        comp->items = std::move(*($1));
+        delete $1;
+        ast = std::move(comp);
     }
     ;
 
+CompUnitItemList
+    : CompUnitItem {
+        auto item_list = new vector<unique_ptr<BaseAST>>();
+        item_list->push_back(unique_ptr<BaseAST>($1));
+        $$ = item_list;
+    }
+    | CompUnitItemList CompUnitItem {
+        auto item_list = $1;
+        item_list->push_back(unique_ptr<BaseAST>($2));
+        $$ = item_list;
+    }
+    ;
+
+CompUnitItem
+    : Decl {
+        $$ = $1;
+    }
+    | FuncDef {
+        $$ = $1;
+    }
+    ;
+
+// 注意, 这里没有将 INT 和 VOID 归为FuncType, 将两者分开可以避免和 VarDecl 开头类型起冲突
 FuncDef
-    : FuncType IDENT '(' ')' Block {
+    : INT IDENT '(' FuncFParamList ')' Block {
         auto ast = new FuncDefAST();
-        ast->func_type = unique_ptr<BaseAST>($1);
+        auto func_type = make_unique<FuncTypeAST>();
+        func_type->type = "int";
+        ast->func_type = std::move(func_type);
         ast->ident = *unique_ptr<string>($2);
-        ast->block = unique_ptr<BaseAST>($5); 
-        $$ = ast; 
+        ast->block = unique_ptr<BaseAST>($6);
+        if ($4 != nullptr) {
+            ast->func_f_params = std::move(*($4));
+            delete $4;
+        }
+        $$ = ast;
+    }
+    | VOID IDENT '(' FuncFParamList ')' Block {
+        auto ast = new FuncDefAST();
+        auto func_type = make_unique<FuncTypeAST>();
+        func_type->type = "void";
+        ast->func_type = std::move(func_type);
+        ast->ident = *unique_ptr<string>($2);
+        ast->block = unique_ptr<BaseAST>($6);
+        if ($4 != nullptr) {
+            ast->func_f_params = std::move(*($4));
+            delete $4;
+        }
+        $$ = ast;
     }
     ;
 
-FuncType
-    : INT {
-        auto ast = new FuncTypeAST();
-        ast->type = "int";
-        $$ = ast;
+FuncFParamList
+    : %empty {
+        $$ = nullptr;
+    }
+    | FuncFParam {
+        auto func_f_param_list = new vector<unique_ptr<BaseAST>>();
+        func_f_param_list->push_back(unique_ptr<BaseAST>($1));
+        $$ = func_f_param_list;
+    }
+    | FuncFParamList ',' FuncFParam {
+        auto func_f_param_list = $1 == nullptr ? new vector<unique_ptr<BaseAST>> : $1;
+        func_f_param_list->push_back(unique_ptr<BaseAST>($3));
+        $$ = func_f_param_list;
+    }
+    ;
+
+FuncFParam
+    : INT IDENT {
+        auto func_f_param = new FuncFParamAST();
+        func_f_param->type = BType::INT;
+        func_f_param->ident = *unique_ptr<string>($2);
+        $$ = func_f_param;
     }
     ;
 
@@ -134,6 +196,7 @@ VarDecl
         auto ast = new VarDeclAST();
         ast->type = BType::INT;
         ast->var_defs = std::move(*($2));
+        delete $2;
         $$ = ast;
     }
     ;
@@ -495,7 +558,40 @@ UnaryExp
         ast->payload = UnaryExpAST::Unary { $1, unique_ptr<BaseAST>($2) };
         $$ = ast;
     }
+    | IDENT '(' ')' {
+        auto ast = new UnaryExpAST();
+        ast->payload = UnaryExpAST::FuncCall { *unique_ptr<string>($1), nullptr };
+        $$ = ast;
+    }
+    | IDENT '(' FuncRParams ')' {
+        auto ast = new UnaryExpAST();
+        ast->payload = UnaryExpAST::FuncCall { *unique_ptr<string>($1), unique_ptr<BaseAST>($3)};
+        $$ = ast;
+    }
     ;
+
+FuncRParams 
+    : ExpList {
+        auto ast = new FuncRParamsAST();
+        ast->exps = std::move(*($1));
+        delete $1;
+        $$ = ast;
+    }
+    ;
+
+ExpList
+    : Exp {
+        auto exps = new vector<unique_ptr<BaseAST>>();
+        exps->push_back(unique_ptr<BaseAST>($1));
+        $$ = exps;
+    }
+    | ExpList ',' Exp {
+        auto exps = $1;
+        exps->push_back(unique_ptr<BaseAST>($3));
+        $$ = exps;
+    }
+    ;
+
 
 UnaryOp
     : ADD {

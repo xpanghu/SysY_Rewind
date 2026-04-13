@@ -145,6 +145,16 @@ public:
         return kind_ == IRValueKind::IR_JUMP;
     }
 
+    bool is_call() const
+    {
+        return kind_ == IRValueKind::IR_CALL;
+    }
+
+    bool is_func_arg_ref() const
+    {
+        return kind_ == IRValueKind::FUNC_ARG_REF;
+    }
+
 protected:
     IRValue() = default;
 
@@ -181,14 +191,57 @@ public:
 protected:
     IRInstruction() = default;
 
-    explicit IRInstruction(IRValueKind k, const IRType* ty, const std::string& name = {}) : IRValue(k, ty, name)
+    explicit IRInstruction(IRValueKind kind, const IRType* ty, const std::string& name = {}) :
+        IRValue(kind, ty, name)
     {
     }
 };
 
-// example: @x = alloc i32
-// name_ = alloc name
-// type_ = pointer<i32>
+class IRFuncArgRef : public IRValue
+{
+    friend class IRModule;
+
+public:
+    size_t index_; // arg position
+    ~IRFuncArgRef() override = default;
+
+private:
+    IRFuncArgRef() = default;
+
+    explicit IRFuncArgRef(size_t index, const IRType* ty, const std::string& name = {}) :
+        IRValue(IRValueKind::FUNC_ARG_REF, ty, name),
+        index_(index)
+    {
+    }
+};
+
+// FunCall :: = "call" SYMBOL "("[Value{"," Value}] ")"
+// call inst type depends on SYMBOL type
+// name represent inst result
+class IRCallInst : public IRInstruction
+{
+    friend class IRModule;
+
+public:
+    IRFunction* callee_;
+    std::vector<IRValue*> args_;
+    ~IRCallInst() override = default;
+
+private:
+    IRCallInst() = default;
+
+    explicit IRCallInst(IRFunction* callee, std::vector<IRValue*> args,
+                        const IRType* ty, std::string name = {}) :
+        IRInstruction(IRValueKind::IR_CALL, ty, name),
+        callee_(callee),
+        args_(std::move(args))
+    {
+    }
+};
+
+// MemoryDeclaration ::= "alloc" Type;
+// IR name_ = the name of alloc address
+// IR type_ = *Type
 class IRAllocInst : public IRInstruction
 {
     friend class IRModule;
@@ -199,14 +252,17 @@ public:
 private:
     IRAllocInst() = default;
 
-    explicit IRAllocInst(const IRType* alloc_ty, const std::string& name = {}) : IRInstruction(IRValueKind::IR_ALLOC, alloc_ty, name)
+    explicit IRAllocInst(const IRType* ty, const std::string& name = {}) :
+        IRInstruction(IRValueKind::IR_ALLOC, ty, name)
     {
     }
 };
 
-// example: store value_, dest_
-// name_ is empty
-// type_ = unit
+// Store :: = "store"(Value | Initializer) "," SYMBOL;
+// SYMBOL type must be pointer type, set to *t
+// then (Value | Initializer) type is t
+// store inst type is unit
+// store inst name is empty
 class IRStoreInst : public IRInstruction
 {
     friend class IRModule;
@@ -223,9 +279,10 @@ private:
     }
 };
 
-// example: %0 = load @x
-// name represent inst result(virtual register)
-// type_ = int32
+//  Load ::= "load" SYMBOL;
+//  SYMBOL type_ must be pointer_type, set to *t,
+//  then the return type of load is t
+//  name represent inst result
 class IRLoadInst : public IRInstruction
 {
     friend class IRModule;
@@ -237,6 +294,21 @@ public:
 private:
     IRLoadInst() = default;
     explicit IRLoadInst(IRValue* src, const IRType* ty, const std::string& name = {}) : IRInstruction(IRValueKind::IR_LOAD, ty, name), src_(src)
+    {
+    }
+};
+
+// zero initializer
+class IRZeroInit : public IRValue
+{
+    friend class IRModule;
+
+public:
+    ~IRZeroInit() override = default;
+
+private:
+    explicit IRZeroInit(const IRType* ty, const std::string& name = {}) :
+        IRValue(IRValueKind::IR_ZERO_INIT, ty, name)
     {
     }
 };
@@ -254,7 +326,9 @@ public:
 
 private:
     IRGlobalAllocInst() = default;
-    explicit IRGlobalAllocInst(IRValue* init, const std::string& name = {}) : IRInstruction(IRValueKind::IR_GLOBALALLOC, nullptr, name), init_(init)
+    explicit IRGlobalAllocInst(IRValue* init, const IRType* ty, const std::string& name = {}) :
+        IRInstruction(IRValueKind::IR_GLOBALALLOC, ty, name),
+        init_(init)
     {
     }
 };
@@ -339,8 +413,11 @@ private:
     }
 };
 
-// ========== IRBasicBlock ==========
 /*
+ * Block ::= SYMBOL ":" {Statement} EndStatement;
+ * Statement ::= SymbolDef | Store | FunCall;
+ * EndStatement ::= Branch | Jump | Return;
+
  * br, jump or ret can be the basic block's termination instruction
  */
 class IRBasicBlock
@@ -360,6 +437,18 @@ private:
     }
 };
 
+/*
+ * FunDef ::= "fun" SYMBOL "(" [FunParams] ")" [":" Type] "{" FunBody "}";
+ * FunParams ::= SYMBOL ":" Type {"," SYMBOL ":" Type};
+ * FunBody ::= {Block};
+
+ * FunDef used to define a function
+ * FunParams used to declare args name and type
+ * FunBody consists one or more basic block
+ * first basic block called entry basic block
+ * and entry block can't have any predecessor
+ */
+
 class IRFunction
 {
     friend class IRModule;
@@ -368,10 +457,17 @@ public:
     const IRType* type_; // example: function<[i32], i32>）
     std::string name_;
     std::vector<IRBasicBlock*> basic_blocks_;
+    std::vector<IRValue*> params_;
+    bool is_declaration_ = false;
 
 private:
     IRFunction() = default;
-    explicit IRFunction(const IRType* type, const std::string& name) : type_(type), name_(name), basic_blocks_({})
+    explicit IRFunction(const IRType* type, const std::string& name, bool is_declaration = false) :
+        type_(type),
+        name_(name),
+        basic_blocks_({}),
+        params_({}),
+        is_declaration_(is_declaration)
     {
     }
 };
@@ -387,12 +483,19 @@ public:
     IRModule(IRModule&&) noexcept = default;
     IRModule& operator=(IRModule&&) noexcept = default;
 
-    IRFunction* make_function(const IRType* type, const std::string& name);
+    IRFunction* make_function(const IRType* type, const std::string& name,
+                              bool is_declaration = false);
 
     IRBasicBlock* make_basic_block(const std::string& name, std::vector<IRValue*> insts = {});
 
     template <typename T, typename... Args>
     T* make_value(Args&&... args);
+
+    // void append_global_value(IRValue& value);
+
+    void append_param(IRFunction& function, IRValue& value);
+
+    void append_global_value(IRValue& value);
 
     void append_basic_block(IRFunction& function, IRBasicBlock& block);
 
@@ -407,9 +510,10 @@ private:
     std::vector<std::unique_ptr<IRValue>> value_storage_;
 };
 
-inline IRFunction* IRModule::make_function(const IRType* type, const std::string& name)
+inline IRFunction* IRModule::make_function(const IRType* type, const std::string& name,
+                                           bool is_declaration)
 {
-    std::unique_ptr<IRFunction> func(new IRFunction(type, name));
+    std::unique_ptr<IRFunction> func(new IRFunction(type, name, is_declaration));
     IRFunction* ptr = func.get();
     func_storage_.push_back(std::move(func));
     funcs_.push_back(ptr);
@@ -432,6 +536,16 @@ inline T* IRModule::make_value(Args&&... args)
     T* ptr = value.get();
     value_storage_.push_back(std::move(value));
     return ptr;
+}
+
+inline void IRModule::append_param(IRFunction& function, IRValue& value)
+{
+    function.params_.push_back(&value);
+}
+
+inline void IRModule::append_global_value(IRValue& value)
+{
+    global_values_.push_back(&value);
 }
 
 // function add basic block

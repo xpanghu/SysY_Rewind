@@ -33,6 +33,7 @@ Hexadecimal   0[xX][0-9a-fA-F]+
 {LineComment}   { /* 忽略 */ }
 {BlockComment}  { /* 忽略 */ }
 
+"void"          { return VOID; }
 "break"         { return BREAK; }
 "continue"      { return CONTINUE; }
 "while"         { return WHILE; }

@@ -20,8 +20,12 @@ IRErrorCode IRTextGen::emit(const IRModule& module, std::ostream& out)
             print_global_value(value, out);
         }
 
+        out << "\n";
+
+        const IRFunction* previous = nullptr;
         for (const auto* func : module.funcs_) {
-            print_function(func, out);
+            print_function(previous, func, out);
+            previous = func;
         }
 
         return IRErrorCode::SUCCESS;
@@ -43,24 +47,94 @@ IRErrorCode IRTextGen::emit_to_string(const IRModule& module, std::string& out)
     return ret;
 }
 
-// todo
 void IRTextGen::print_global_value(const IRValue* value, std::ostream& out)
 {
-}
-
-void IRTextGen::print_function(const IRFunction* func, std::ostream& out)
-{
-    // function head：fun @main(): i32 {
-    out << "fun @" << func->name_ << "(): ";
-    print_type(func->type_, out);
-    out << " {\n";
-
-    // print all blocks
-    for (const auto* block : func->basic_blocks_) {
-        print_basic_block(block, out);
+    if (!value->is_global_alloc()) {
+        throw std::runtime_error("unsupported global value");
     }
 
-    out << "}\n";
+    const auto* global_alloc = value->as<IRGlobalAllocInst>();
+    if (global_alloc->type_ == nullptr || !global_alloc->type_->is_pointer()) {
+        throw std::runtime_error("global alloc must have pointer type");
+    }
+
+    const auto* alloc_type = global_alloc->type_->as<IRPointerType>();
+    out << "global " << global_alloc->name_ << " = alloc ";
+    print_type(alloc_type->base_type, out);
+    out << ", ";
+
+    if (global_alloc->init_ == nullptr) {
+        throw std::runtime_error("global alloc must have initializer");
+    }
+
+    switch (global_alloc->init_->kind_) {
+    case IRValueKind::IR_ZERO_INIT:
+        out << "zeroinit";
+        break;
+    case IRValueKind::IR_INTEGER:
+        print_value(global_alloc->init_, out);
+        break;
+    default:
+        throw std::runtime_error("unsupported global initializer");
+    }
+
+    out << "\n";
+}
+
+void IRTextGen::print_function(const IRFunction* previous,
+                               const IRFunction* current,
+                               std::ostream& out)
+{
+    if (previous != nullptr
+        && previous->is_declaration_
+        && !current->is_declaration_) {
+        out << "\n";
+    }
+
+    // function declaration
+    if (current->is_declaration_) {
+        out << "decl @" << current->name_ << "(";
+        for (size_t i = 0; i < current->params_.size(); ++i) {
+            if (i > 0) {
+                out << ", ";
+            }
+            print_type(current->params_[i]->type_, out);
+        }
+        out << ")";
+        if (!current->type_->is_unit()) {
+            out << ": ";
+            print_type(current->type_, out);
+        }
+        out << "\n";
+        return;
+    }
+
+    // function definition
+    out << "fun @" << current->name_ << "(";
+    for (size_t i = 0; i < current->params_.size(); ++i) {
+        if (i > 0) {
+            out << ", ";
+        }
+        print_value(current->params_[i], out);
+        out << ": ";
+        print_type(current->params_[i]->type_, out);
+    }
+    out << ")";
+
+    if (!current->type_->is_unit()) {
+        out << ": ";
+        print_type(current->type_, out);
+    }
+
+    out << " {\n";
+    // print all blocks
+    for (const auto* block : current->basic_blocks_) {
+        print_basic_block(block, out);
+        if (block != current->basic_blocks_.back()) {
+            out << "\n";
+        }
+    }
+    out << "}\n\n";
 }
 
 void IRTextGen::print_basic_block(const IRBasicBlock* block, std::ostream& out)
@@ -76,8 +150,6 @@ void IRTextGen::print_basic_block(const IRBasicBlock* block, std::ostream& out)
             out << line.str() << "\n";
         }
     }
-
-    out << "\n";
 }
 
 void IRTextGen::print_instruction(const IRValue* inst, std::ostream& out)
@@ -131,6 +203,22 @@ void IRTextGen::print_instruction(const IRValue* inst, std::ostream& out)
         print_value(store->dest_, out);
         break;
     }
+    case rewind_ir::IRValueKind::IR_CALL: {
+        const auto* call = inst->as<IRCallInst>();
+        out << "  ";
+        if (!call->type_->is_unit()) {
+            out << call->name_ << " = ";
+        }
+        out << "call @" << call->callee_->name_ << "(";
+        for (size_t i = 0; i < call->args_.size(); ++i) {
+            if (i > 0) {
+                out << ", ";
+            }
+            print_value(call->args_[i], out);
+        }
+        out << ")";
+        break;
+    }
     case rewind_ir::IRValueKind::IR_BRANCH: {
         const auto* branch = inst->as<IRBranchInst>();
         const auto* if_bb = branch->if_basic_block_;
@@ -170,7 +258,7 @@ void IRTextGen::print_value(const IRValue* value, std::ostream& out)
         return;
     }
 
-    // virtual register
+    // inst result
     out << value->name_;
 }
 
@@ -199,9 +287,8 @@ void IRTextGen::print_type(const IRType* type, std::ostream& out)
     }
     case IRTypeTag::POINTER: {
         auto* pointer_type = type->as<IRPointerType>();
-        out << "pointer<";
+        out << "*";
         print_type(pointer_type->base_type, out);
-        out << ">";
         break;
     }
     case IRTypeTag::FUNCTION: {

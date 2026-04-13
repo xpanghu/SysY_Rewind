@@ -1,6 +1,7 @@
 IMAGE = maxxing/compiler-dev
 BUILD_DIR = build
 COMPILER = $(BUILD_DIR)/compiler
+SIMPLE_TEST = ./tests/hello.sysy
 
 UID := $(shell id -u)
 GID := $(shell id -g)
@@ -27,11 +28,11 @@ shell:
 			$(IMAGE) bash
 
 run-ast:
-	$(COMPILER) -ast ./tests/hello.c -o ./debug/hello.ast
+	$(COMPILER) -ast $(SIMPLE_TEST) -o ./debug/hello.ast
 run-koopa:
-	$(COMPILER) -koopa ./tests/hello.c -o ./debug/hello.koopa
+	$(COMPILER) -koopa $(SIMPLE_TEST) -o ./debug/hello.koopa
 run-riscv:
-	$(COMPILER) -riscv ./tests/hello.c -o ./debug/hello.asm
+	$(COMPILER) -riscv $(SIMPLE_TEST) -o ./debug/hello.asm
 
 #test:
 #python3 scripts/test_runner.py koopa

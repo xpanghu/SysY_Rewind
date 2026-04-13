@@ -23,7 +23,11 @@ namespace rewind_ir
 class FuncContext
 {
 public:
-    // break and continue complementary support
+    /*
+     * break and continue relevant content
+     * LoopTargets store break address and continue address
+     * loop_stack_ record current LoopTargets
+     */
     struct LoopTargets {
         IRBasicBlock* break_target;
         IRBasicBlock* continue_target;
@@ -55,6 +59,9 @@ public:
         return loop_stack_.back();
     }
 
+    /*
+     * ScopeGuard
+     */
     class ScopeGuard
     {
     public:
@@ -91,7 +98,9 @@ public:
         bool active_ = true;
     };
 
-    FuncContext(IRModule& module, IRFunction& function) : module_(module), current_function_(&function)
+    FuncContext(IRModule& module, IRFunction& function) :
+        module_(module),
+        current_function_(&function)
     {
     }
 
@@ -237,7 +246,7 @@ private:
     IRFunction* current_function_ = nullptr;
     IRBasicBlock* current_block_ = nullptr;
 
-    SymbolTable symbols_;
+    SymbolTable symbols_; // function symbol table
     std::vector<LoopTargets> loop_stack_;
     std::unordered_map<std::string, int> alloc_name_counter_;
     std::unordered_map<std::string, int> block_name_counter_;

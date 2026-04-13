@@ -3,10 +3,14 @@
 #include "rewind_ir.h"
 #include "ir_type.h"
 #include "symbol_table.h"
+#include <cstddef>
 #include <cstdint>
 
 #include <stdexcept>
 #include <variant>
+
+int b = 10;
+int a = 10 + b;
 
 namespace rewind_ir
 {
@@ -105,6 +109,23 @@ inline int32_t eval_binary_op(BinaryOp op, int32_t a, int32_t b)
     throw std::runtime_error("unsupported BinaryOp for const eval");
 }
 
+IRFunction* declare_external_function(IRModule& module,
+                                      SymbolTable& module_symbols,
+                                      const std::string& name,
+                                      std::vector<const IRType*> param_types,
+                                      const IRType* return_type)
+{
+    auto* func = module.make_function(return_type, name, true);
+    module_symbols.define_function(name, func);
+
+    for (size_t i = 0; i < param_types.size(); ++i) {
+        auto* arg_ref = module.make_value<IRFuncArgRef>(i, param_types[i]);
+        module.append_param(*func, *arg_ref);
+    }
+
+    return func;
+}
+
 } // namespace
 
 // Overloaded struct defined for use with std::variant
@@ -138,18 +159,132 @@ IRModule RewindIRBuilder::build(const BaseAST& ast)
 void RewindIRBuilder::lower_comp_unit(const CompUnitAST& ast,
                                       IRModule& module)
 {
-    const auto& func_def = expect_node<FuncDefAST>(*ast.func_def, "FuncDefAST");
-    lower_func_def(func_def, module);
+    declare_library_function(module);
+
+    for (const auto& item : ast.items) {
+        if (const auto* func_def = dynamic_cast<const FuncDefAST*>(item.get())) {
+            declare_function(*func_def, module);
+        }
+    }
+
+    for (const auto& item : ast.items) {
+        if (const auto* global_decl = dynamic_cast<const DeclAST*>(item.get())) {
+            lower_gloabl_decl(*global_decl, module);
+        }
+        if (const auto* func_def = dynamic_cast<const FuncDefAST*>(item.get())) {
+            lower_func_def(*func_def, module);
+        }
+    }
+}
+
+void RewindIRBuilder::declare_library_function(IRModule& module)
+{
+    const auto* i32 = get_i32_type();
+    const auto* unit = get_unit_type();
+    const auto* i32_ptr = get_pointer_type(i32);
+
+    declare_external_function(module, module_symbols_, "getint", {}, i32);
+    declare_external_function(module, module_symbols_, "getch", {}, i32);
+    declare_external_function(module, module_symbols_, "putint", {i32}, unit);
+    declare_external_function(module, module_symbols_, "putch", {i32}, unit);
+    declare_external_function(module, module_symbols_, "starttime", {}, unit);
+    declare_external_function(module, module_symbols_, "stoptime", {}, unit);
+
+    // Keep the standard SysY array runtime declarations available for later
+    // array support.
+    declare_external_function(module, module_symbols_, "getarray", {i32_ptr}, i32);
+    declare_external_function(module, module_symbols_, "putarray", {i32, i32_ptr}, unit);
+}
+
+IRFunction* RewindIRBuilder::declare_function(const FuncDefAST& ast,
+                                              IRModule& module)
+{
+    // get function return type
+    const auto& func_type = expect_node<FuncTypeAST>(*ast.func_type, "FuncTypeAST");
+    auto return_type = lower_func_type(func_type);
+
+    // define function
+    auto func = module.make_function(return_type, ast.ident);
+    module_symbols_.define_function(ast.ident, func);
+
+    // assign formal args
+    // ? Note : not define variable in symbol table
+    size_t param_index = 0;
+    for (const auto& item : ast.func_f_params) {
+        const auto& func_f_param = expect_node<FuncFParamAST>(*item, "FuncFParam");
+        auto* arg_ref = module.make_value<IRFuncArgRef>(
+            param_index++,
+            lower_func_f_params(func_f_param),
+            "@" + func_f_param.ident);
+        module.append_param(*func, *arg_ref);
+    }
+    return func;
+}
+
+void RewindIRBuilder::lower_gloabl_decl(const DeclAST& ast, IRModule& module)
+{
+    if (const auto* const_decl = dynamic_cast<const ConstDeclAST*>(ast.const_or_var.get())) {
+        for (const auto& def_base : const_decl->const_defs) {
+            const auto& def = expect_node<ConstDefAST>(*def_base, "ConstDefAST");
+            const auto& init = expect_node<ConstInitValAST>(*def.const_init_val,
+                                                            "ConstInitValAST");
+            const auto& exp = expect_node<ExpAST>(*init.const_exp, "ExpAST");
+
+            auto value = eval_exp(exp);
+            module_symbols_.define_const(def.ident, value);
+        }
+        return;
+    }
+
+    if (const auto* var_decl = dynamic_cast<const VarDeclAST*>(ast.const_or_var.get())) {
+        auto* i32_type = get_i32_type();
+        auto* i32_ptr_type = get_pointer_type(i32_type);
+
+        for (const auto& def_base : var_decl->var_defs) {
+            const auto& def = expect_node<VarDefAST>(*def_base, "VarDefAST");
+
+            std::visit(
+                overloaded{
+                    [&](const VarDefAST::DefEmpty& def_empty) {
+                        // set zero to the default init of global value
+                        auto* zero_init = module.make_value<IRZeroInit>(i32_type);
+                        auto* global_alloc = module.make_value<IRGlobalAllocInst>(
+                            zero_init,
+                            i32_ptr_type,
+                            "@" + def_empty.ident);
+                        module.append_global_value(*global_alloc);
+                        module_symbols_.define_var(def_empty.ident, global_alloc);
+                    },
+                    [&](const VarDefAST::DefValue& def_value) {
+                        // eval init value
+                        // init value must be constexpr
+                        const auto& init_val =
+                            expect_node<InitValAST>(*def_value.init_val, "InitValAST");
+                        const auto& exp = expect_node<ExpAST>(*init_val.exp, "ExpAST");
+                        auto init = get_or_create_constant(eval_exp(exp), module);
+
+                        auto* global_alloc = module.make_value<IRGlobalAllocInst>(
+                            init,
+                            i32_ptr_type,
+                            "@" + def_value.ident);
+                        module.append_global_value(*global_alloc);
+                        module_symbols_.define_var(def_value.ident, global_alloc);
+                    }},
+                def.payload);
+        }
+        return;
+    }
+
+    throw std::runtime_error("unsupported global decl type");
 }
 
 IRFunction* RewindIRBuilder::lower_func_def(const FuncDefAST& ast,
                                             IRModule& module)
 {
-    // define function
-    const auto& func_type =
-        expect_node<FuncTypeAST>(*ast.func_type, "FuncTypeAST");
-    auto type = lower_func_type(func_type);
-    auto func = module.make_function(type, ast.ident);
+    auto* func = lookup_function(ast.ident);
+    if (func == nullptr) {
+        throw std::runtime_error("undefined function in lowering: " + ast.ident);
+    }
 
     // set function context
     FuncContext ctx(module, *func);
@@ -159,8 +294,43 @@ IRFunction* RewindIRBuilder::lower_func_def(const FuncDefAST& ast,
     auto& basic_block = ctx.create_function_block("entry");
     ctx.set_current_block(basic_block);
 
+    auto function_scope = ctx.make_scope();
+
+    // alloc formal args
+    for (size_t i = 0; i < ast.func_f_params.size(); ++i) {
+        const auto& func_f_param =
+            expect_node<FuncFParamAST>(*ast.func_f_params[i], "FuncFParam");
+
+        // alloc variable
+        auto& alloc = ctx.create_block_value<IRAllocInst>(
+            get_pointer_type(get_i32_type()),
+            ctx.next_percent_name());
+        ctx.symbols().define_var(func_f_param.ident, &alloc);
+
+        // store arg variable
+        static_cast<void>(ctx.create_block_value<IRStoreInst>(
+            func->params_[i],
+            &alloc,
+            get_unit_type()));
+    }
+
+    // lower BlockAST
     const auto& block = expect_node<BlockAST>(*ast.block, "BlockAST");
     lower_block(block, ctx);
+
+    /*
+     * ensure function have return
+     */
+    if (ctx.has_current_block()) {
+        if (func->type_->is_unit()) {
+            static_cast<void>(ctx.terminate_with_return(nullptr));
+        } else if (func->type_->is_int32()) {
+            static_cast<void>(ctx.terminate_with_return(
+                get_or_create_constant(0, module)));
+        } else {
+            throw std::runtime_error("unsupported function return type");
+        }
+    }
 
     return func;
 }
@@ -173,6 +343,12 @@ const IRType* RewindIRBuilder::lower_func_type(const FuncTypeAST& ast) const
         return get_unit_type();
     }
     throw std::runtime_error("unsupported FuncTypeAST");
+}
+
+// ? todo
+const IRType* RewindIRBuilder::lower_func_f_params(const FuncFParamAST& ast)
+{
+    return get_i32_type();
 }
 
 void RewindIRBuilder::lower_block(const BlockAST& ast, FuncContext& ctx)
@@ -194,12 +370,17 @@ void RewindIRBuilder::lower_block(const BlockAST& ast, FuncContext& ctx)
             } else if (auto* var_decl = dynamic_cast<VarDeclAST*>(decl->const_or_var.get())) {
                 lower_var_decl(*var_decl, ctx);
             } else {
-                throw std::runtime_error("no such decl");
+                throw std::runtime_error("unsupported decl type");
             }
         }
     }
 }
 
+/*
+ * lower_const, not create IRConstant,
+ * just define_const into symbol table
+ * only eval_exp use constant , then create constant
+ */
 void RewindIRBuilder::lower_const_decl(const ConstDeclAST& ast, FuncContext& ctx)
 {
     for (const auto& def_base : ast.const_defs) {
@@ -211,7 +392,6 @@ void RewindIRBuilder::lower_const_decl(const ConstDeclAST& ast, FuncContext& ctx
         // eval const exp
         int32_t value = eval_exp(exp, ctx);
 
-        // define const
         ctx.symbols().define_const(def.ident, value);
     }
 }
@@ -240,6 +420,7 @@ void RewindIRBuilder::lower_var_decl(const VarDeclAST& ast, FuncContext& ctx)
                     // lower exp
                     // store exp_value, @ident
                     const auto& init_val = expect_node<InitValAST>(*def.init_val, "InitValAST");
+
                     const auto& exp = expect_node<ExpAST>(*init_val.exp, "ExpAST");
                     auto exp_value = lower_exp(exp, ctx);
 
@@ -259,11 +440,18 @@ void RewindIRBuilder::lower_stmt(const StmtAST& ast, FuncContext& ctx)
             [&](const StmtAST::Return& ret_stmt) {
                 IRValue* ret_value = nullptr;
 
-                // check return exp is exist
-                // exp can be empty
+                /*
+                 * check if return exp exist
+                 * then check if return exp type same as  function return type
+                 */
                 if (ret_stmt.exp) {
+                    if (ctx.current_function().type_->is_unit()) {
+                        throw std::runtime_error("void function should not return a value");
+                    }
                     const auto& exp = expect_node<ExpAST>(*ret_stmt.exp, "ExpAST");
                     ret_value = lower_exp(exp, ctx);
+                } else if (ctx.current_function().type_->is_int32()) {
+                    ret_value = get_or_create_constant(0, ctx.module());
                 }
 
                 static_cast<void>(ctx.terminate_with_return(ret_value));
@@ -274,7 +462,7 @@ void RewindIRBuilder::lower_stmt(const StmtAST& ast, FuncContext& ctx)
                 const auto& exp = expect_node<ExpAST>(*assign_stmt.exp, "ExpAST");
                 auto exp_inst = lower_exp(exp, ctx);
 
-                auto value = lookup_symbol(ctx, assign_stmt.LVal);
+                auto value = lookup_value(ctx, assign_stmt.LVal);
                 // value not exist or value is const throw error
                 if (!value) {
                     throw std::runtime_error(assign_stmt.LVal + "is not exist");
@@ -747,6 +935,52 @@ IRValue* RewindIRBuilder::lower_unary_exp(const UnaryExpAST& ast,
                 }
                 }
                 throw std::runtime_error("invalid UnaryOp");
+            },
+            [&](const UnaryExpAST::FuncCall& funcCall) -> IRValue* {
+                // check if function exist
+                auto* callee = lookup_function(funcCall.ident);
+                if (callee == nullptr) {
+                    throw std::runtime_error("undefined function: " + funcCall.ident);
+                }
+
+                // get params
+                std::vector<IRValue*> args;
+                if (funcCall.func_r_params != nullptr) {
+                    const auto& func_r_params =
+                        expect_node<FuncRParamsAST>(*funcCall.func_r_params, "FuncRParamsAST");
+                    for (const auto& item : func_r_params.exps) {
+                        const auto& exp = expect_node<ExpAST>(*item, "ExpAST");
+                        args.push_back(lower_exp(exp, ctx));
+                    }
+                }
+
+                // check if params match
+                // from two sides : size and type_
+                if (args.size() != callee->params_.size()) {
+                    throw std::runtime_error(
+                        "function argument count mismatch: " + funcCall.ident);
+                }
+
+                for (size_t i = 0; i < args.size(); ++i) {
+                    if (args[i]->type_ != callee->params_[i]->type_) {
+                        throw std::runtime_error(
+                            "function argument type mismatch: " + funcCall.ident);
+                    }
+                }
+
+                // create call inst
+                if (callee->type_->is_unit()) {
+                    return &ctx.create_block_value<IRCallInst>(
+                        callee,
+                        std::move(args),
+                        callee->type_);
+                }
+
+                return &ctx.create_block_value<IRCallInst>(
+                    callee,
+                    std::move(args),
+                    callee->type_,
+                    ctx.next_percent_name());
             }},
         ast.payload);
 }
@@ -765,7 +999,7 @@ IRValue* RewindIRBuilder::lower_primary_exp(const PrimaryExpAST& ast,
                 return lower_exp(exp, ctx);
             },
             [&](const PrimaryExpAST::LValue& lvalue) -> IRValue* {
-                const auto& sym = lookup_symbol(ctx, lvalue.ident);
+                const auto& sym = lookup_value(ctx, lvalue.ident);
 
                 if (sym) {
                     const auto& value = *sym;
@@ -773,7 +1007,7 @@ IRValue* RewindIRBuilder::lower_primary_exp(const PrimaryExpAST& ast,
                         // const
                         return get_or_create_constant(std::get<int32_t>(value), module);
                     } else {
-                        // variable
+                        // local variable or global variable
                         IRValue* alloc = std::get<IRValue*>(value);
                         return &ctx.create_block_value<IRLoadInst>(
                             alloc, get_i32_type(), ctx.next_percent_name());
@@ -789,6 +1023,12 @@ int32_t RewindIRBuilder::eval_exp(const ExpAST& ast, const FuncContext& ctx)
 {
     const auto& lor_exp = expect_node<LOrExpAST>(*ast.lor_exp, "LOrExpAST");
     return eval_lor_exp(lor_exp, ctx);
+}
+
+int32_t RewindIRBuilder::eval_exp(const ExpAST& ast)
+{
+    const auto& lor_exp = expect_node<LOrExpAST>(*ast.lor_exp, "LOrExpAST");
+    return eval_lor_exp(lor_exp);
 }
 
 int32_t RewindIRBuilder::eval_lor_exp(const LOrExpAST& ast, const FuncContext& ctx)
@@ -807,6 +1047,27 @@ int32_t RewindIRBuilder::eval_lor_exp(const LOrExpAST& ast, const FuncContext& c
                     expect_node<LAndExpAST>(*binary.land_exp, "LAndExpAST");
                 auto lhs = eval_lor_exp(lor_exp, ctx);
                 auto rhs = eval_land_exp(land_exp, ctx);
+                return lhs || rhs;
+            }},
+        ast.payload);
+}
+
+int32_t RewindIRBuilder::eval_lor_exp(const LOrExpAST& ast)
+{
+    return std::visit(
+        overloaded{
+            [&](const LOrExpAST::Simple& simple) -> int32_t {
+                const auto& land_exp =
+                    expect_node<LAndExpAST>(*simple.land_exp, "LAndExpAST");
+                return eval_land_exp(land_exp);
+            },
+            [&](const LOrExpAST::Binary& binary) -> int32_t {
+                const auto& lor_exp =
+                    expect_node<LOrExpAST>(*binary.lor_exp, "LOrExpAST");
+                const auto& land_exp =
+                    expect_node<LAndExpAST>(*binary.land_exp, "LAndExpAST");
+                auto lhs = eval_lor_exp(lor_exp);
+                auto rhs = eval_land_exp(land_exp);
                 return lhs || rhs;
             }},
         ast.payload);
@@ -834,6 +1095,27 @@ int32_t RewindIRBuilder::eval_land_exp(const LAndExpAST& ast,
         ast.payload);
 }
 
+int32_t RewindIRBuilder::eval_land_exp(const LAndExpAST& ast)
+{
+    return std::visit(
+        overloaded{
+            [&](const LAndExpAST::Simple& simple) -> int32_t {
+                const auto& eq_exp =
+                    expect_node<EqExpAST>(*simple.eq_exp, "EqExpAST");
+                return eval_eq_exp(eq_exp);
+            },
+            [&](const LAndExpAST::Binary& binary) -> int32_t {
+                const auto& land_exp =
+                    expect_node<LAndExpAST>(*binary.land_exp, "LAndExpAST");
+                const auto& eq_exp =
+                    expect_node<EqExpAST>(*binary.eq_exp, "EqExpAST");
+                auto lhs = eval_land_exp(land_exp);
+                auto rhs = eval_eq_exp(eq_exp);
+                return lhs && rhs;
+            }},
+        ast.payload);
+}
+
 int32_t RewindIRBuilder::eval_eq_exp(const EqExpAST& ast, const FuncContext& ctx)
 {
     return std::visit(
@@ -850,6 +1132,27 @@ int32_t RewindIRBuilder::eval_eq_exp(const EqExpAST& ast, const FuncContext& ctx
                     expect_node<RelExpAST>(*binary.rel_exp, "RelExpAST");
                 auto lhs = eval_eq_exp(eq_exp, ctx);
                 auto rhs = eval_rel_exp(rel_exp, ctx);
+                return eval_binary_op(binary.op, lhs, rhs);
+            }},
+        ast.payload);
+}
+
+int32_t RewindIRBuilder::eval_eq_exp(const EqExpAST& ast)
+{
+    return std::visit(
+        overloaded{
+            [&](const EqExpAST::Simple& simple) -> int32_t {
+                const auto& rel_exp =
+                    expect_node<RelExpAST>(*simple.rel_exp, "RelExpAST");
+                return eval_rel_exp(rel_exp);
+            },
+            [&](const EqExpAST::Binary& binary) -> int32_t {
+                const auto& eq_exp =
+                    expect_node<EqExpAST>(*binary.eq_exp, "EqExpAST");
+                const auto& rel_exp =
+                    expect_node<RelExpAST>(*binary.rel_exp, "RelExpAST");
+                auto lhs = eval_eq_exp(eq_exp);
+                auto rhs = eval_rel_exp(rel_exp);
                 return eval_binary_op(binary.op, lhs, rhs);
             }},
         ast.payload);
@@ -876,6 +1179,27 @@ int32_t RewindIRBuilder::eval_rel_exp(const RelExpAST& ast, const FuncContext& c
         ast.payload);
 }
 
+int32_t RewindIRBuilder::eval_rel_exp(const RelExpAST& ast)
+{
+    return std::visit(
+        overloaded{
+            [&](const RelExpAST::Simple& s) -> int32_t {
+                const auto& add_exp =
+                    expect_node<AddExpAST>(*s.add_exp, "AddExpAST");
+                return eval_add_exp(add_exp);
+            },
+            [&](const RelExpAST::Binary& b) -> int32_t {
+                const auto& rel_exp =
+                    expect_node<RelExpAST>(*b.rel_exp, "RelExpAST");
+                const auto& add_exp =
+                    expect_node<AddExpAST>(*b.add_exp, "AddExpAST");
+                auto lhs = eval_rel_exp(rel_exp);
+                auto rhs = eval_add_exp(add_exp);
+                return eval_binary_op(b.op, lhs, rhs);
+            }},
+        ast.payload);
+}
+
 int32_t RewindIRBuilder::eval_add_exp(const AddExpAST& ast, const FuncContext& ctx)
 {
     return std::visit(
@@ -897,6 +1221,27 @@ int32_t RewindIRBuilder::eval_add_exp(const AddExpAST& ast, const FuncContext& c
         ast.payload);
 }
 
+int32_t RewindIRBuilder::eval_add_exp(const AddExpAST& ast)
+{
+    return std::visit(
+        overloaded{
+            [&](const AddExpAST::Simple& s) -> int32_t {
+                const auto& mul_exp =
+                    expect_node<MulExpAST>(*s.mul_exp, "MulExpAST");
+                return eval_mul_exp(mul_exp);
+            },
+            [&](const AddExpAST::Binary& b) -> int32_t {
+                const auto& add_exp =
+                    expect_node<AddExpAST>(*b.add_exp, "AddExpAST");
+                const auto& mul_exp =
+                    expect_node<MulExpAST>(*b.mul_exp, "MulExpAST");
+                auto lhs = eval_add_exp(add_exp);
+                auto rhs = eval_mul_exp(mul_exp);
+                return eval_binary_op(b.op, lhs, rhs);
+            }},
+        ast.payload);
+}
+
 int32_t RewindIRBuilder::eval_mul_exp(const MulExpAST& ast, const FuncContext& ctx)
 {
     return std::visit(
@@ -913,6 +1258,27 @@ int32_t RewindIRBuilder::eval_mul_exp(const MulExpAST& ast, const FuncContext& c
                     expect_node<UnaryExpAST>(*b.unary_exp, "UnaryExpAST");
                 auto lhs = eval_mul_exp(mul_exp, ctx);
                 auto rhs = eval_unary_exp(unary_exp, ctx);
+                return eval_binary_op(b.op, lhs, rhs);
+            }},
+        ast.payload);
+}
+
+int32_t RewindIRBuilder::eval_mul_exp(const MulExpAST& ast)
+{
+    return std::visit(
+        overloaded{
+            [&](const MulExpAST::Simple& s) -> int32_t {
+                const auto& unary_exp =
+                    expect_node<UnaryExpAST>(*s.unary_exp, "UnaryExpAST");
+                return eval_unary_exp(unary_exp);
+            },
+            [&](const MulExpAST::Binary& b) -> int32_t {
+                const auto& mul_exp =
+                    expect_node<MulExpAST>(*b.mul_exp, "MulExpAST");
+                const auto& unary_exp =
+                    expect_node<UnaryExpAST>(*b.unary_exp, "UnaryExpAST");
+                auto lhs = eval_mul_exp(mul_exp);
+                auto rhs = eval_unary_exp(unary_exp);
                 return eval_binary_op(b.op, lhs, rhs);
             }},
         ast.payload);
@@ -940,6 +1306,38 @@ int32_t RewindIRBuilder::eval_unary_exp(const UnaryExpAST& ast, const FuncContex
                     return !operand;
                 }
                 throw std::runtime_error("invalid UnaryOp");
+            },
+            [&](const UnaryExpAST::FuncCall& funcCall) -> int32_t {
+                throw std::runtime_error("can't handle function call");
+            }},
+        ast.payload);
+}
+
+int32_t RewindIRBuilder::eval_unary_exp(const UnaryExpAST& ast)
+{
+    return std::visit(
+        overloaded{
+            [&](const UnaryExpAST::Primary& p) -> int32_t {
+                const auto& primary =
+                    expect_node<PrimaryExpAST>(*p.exp, "PrimaryExpAST");
+                return eval_primary_exp(primary);
+            },
+            [&](const UnaryExpAST::Unary& u) -> int32_t {
+                const auto& unary_exp =
+                    expect_node<UnaryExpAST>(*u.exp, "UnaryExpAST");
+                auto operand = eval_unary_exp(unary_exp);
+                switch (u.op) {
+                case UnaryOp::PLUS:
+                    return +operand;
+                case UnaryOp::MINUS:
+                    return -operand;
+                case UnaryOp::NOT:
+                    return !operand;
+                }
+                throw std::runtime_error("invalid UnaryOp");
+            },
+            [&](const UnaryExpAST::FuncCall&) -> int32_t {
+                throw std::runtime_error("can't handle function call");
             }},
         ast.payload);
 }
@@ -955,7 +1353,7 @@ int32_t RewindIRBuilder::eval_primary_exp(const PrimaryExpAST& ast,
                 return eval_exp(exp, ctx);
             },
             [&](const PrimaryExpAST::LValue& l) -> int32_t {
-                auto sym = lookup_symbol(ctx, l.ident);
+                auto sym = lookup_value(ctx, l.ident);
                 if (!sym) {
                     throw std::runtime_error("undefined const: " + l.ident);
                 } else {
@@ -965,6 +1363,31 @@ int32_t RewindIRBuilder::eval_primary_exp(const PrimaryExpAST& ast,
                     } else {
                         throw std::runtime_error(std::get<IRValue*>(value)->name_ + " is not const");
                     }
+                }
+            }},
+        ast.payload);
+}
+
+int32_t RewindIRBuilder::eval_primary_exp(const PrimaryExpAST& ast)
+{
+    return std::visit(
+        overloaded{
+            [&](const PrimaryExpAST::Number& n) -> int32_t { return n.value; },
+            [&](const PrimaryExpAST::Expression& e) -> int32_t {
+                const auto& exp = expect_node<ExpAST>(*e.exp, "ExpAST");
+                return eval_exp(exp);
+            },
+            [&](const PrimaryExpAST::LValue& l) -> int32_t {
+                auto sym = lookup_value(l.ident);
+                if (!sym) {
+                    throw std::runtime_error("undefined const: " + l.ident);
+                }
+                const auto& value = *sym;
+                if (std::holds_alternative<int32_t>(value)) {
+                    return std::get<int32_t>(value);
+                } else {
+                    throw std::runtime_error(
+                        std::get<IRValue*>(value)->name_ + " is not const");
                 }
             }},
         ast.payload);
@@ -982,11 +1405,22 @@ IRValue* RewindIRBuilder::get_or_create_constant(int32_t value, IRModule& module
 }
 
 std::optional<std::variant<int32_t, IRValue*>>
-RewindIRBuilder::lookup_symbol(const FuncContext& ctx, const std::string& name) const
+RewindIRBuilder::lookup_value(const FuncContext& ctx, const std::string& name) const
 {
-    if (auto local = ctx.symbols().lookup(name)) {
+    if (auto local = ctx.symbols().lookup_value(name)) {
         return local;
     }
-    return module_symbols_.lookup(name);
+    return module_symbols_.lookup_value(name);
+}
+
+std::optional<std::variant<int32_t, IRValue*>>
+RewindIRBuilder::lookup_value(const std::string& name) const
+{
+    return module_symbols_.lookup_value(name);
+}
+
+IRFunction* RewindIRBuilder::lookup_function(const std::string& name) const
+{
+    return module_symbols_.lookup_function(name);
 }
 } // namespace rewind_ir

@@ -18,13 +18,21 @@ enum class Register {
     t0, // t0 - t6 temporary register
     t1,
     t2,
-    a0, // save return parameters
+    // a0 - a7 used to pass non-float arguments to a function during function calls
+    // a0 a1 save return parameters
+    a0,
+    a1,
+    a2,
+    a3,
+    a4,
+    a5,
+    a6,
+    a7,
 };
 
 class FunctionFrame
 {
 public:
-    const int align = 16;
     void build(const rewind_ir::IRFunction& func);
 
     bool has_object_slot(const rewind_ir::IRValue* value) const;
@@ -43,14 +51,29 @@ public:
         return ra_offset_;
     }
 
+    bool has_saved_ra() const
+    {
+        return has_saved_ra_;
+    }
+
+    int32_t outgoing_arg_size() const
+    {
+        return outgoing_arg_size_;
+    }
+
+    int32_t outgoing_arg_offset(size_t arg_index) const;
+    int32_t incoming_stack_arg_offset(size_t arg_index) const;
+
 private:
     static bool produces_stack_value(const rewind_ir::IRValue& value); // check if inst have result value
     static int32_t alloc_size(const rewind_ir::IRAllocInst& inst);
     static int32_t align_to(int32_t value, int32_t align);
 
     int32_t next_slot_offset_ = 0;
-    int32_t frame_size_ = 16; // the size of stack frame
-    int32_t ra_offset_ = 12;  // return address offest
+    int32_t frame_size_ = 0; // the size of function stack frame
+    int32_t ra_offset_ = 0;  // return address offset
+    int32_t outgoing_arg_size_ = 0;
+    bool has_saved_ra_ = false;
 
     std::unordered_map<const rewind_ir::IRValue*, int32_t> object_slots_; // represent the stack offest of the variable
     std::unordered_map<const rewind_ir::IRValue*, int32_t> value_slots_;  // represent the stack offest of the intst result
@@ -70,6 +93,7 @@ public:
 private:
     // IR traversal
     void emit_function(const rewind_ir::IRFunction& func);
+    void emit_global_value(const rewind_ir::IRGlobalAllocInst& global_alloc);
     void emit_basic_block(const rewind_ir::IRBasicBlock& block);
     void emit_instruction(const rewind_ir::IRValue& inst);
 
@@ -78,6 +102,7 @@ private:
     void emit_store(const rewind_ir::IRStoreInst& inst);
     void emit_load(const rewind_ir::IRLoadInst& inst);
     void emit_binary(const rewind_ir::IRBinaryInst& inst);
+    void emit_call(const rewind_ir::IRCallInst& inst);
     void emit_branch(const rewind_ir::IRBranchInst& inst);
     void emit_jump(const rewind_ir::IRJumpInst& inst);
     void emit_return(const rewind_ir::IRReturnInst& inst);
@@ -88,6 +113,7 @@ private:
      */
     // Operand materialization helpers
     void materialize_value(const rewind_ir::IRValue* value, Register dst);
+    void store_to_addressable(const rewind_ir::IRValue* value, Register src);
     void materialize_pointer(const rewind_ir::IRValue* value, Register dst);
     void spill_value(const rewind_ir::IRValue* value, Register src);
 
@@ -119,14 +145,18 @@ private:
     void emit_sra(Register rd, Register rs1, Register rs2);
     void emit_seqz(Register rd, Register rs);
     void emit_snez(Register rd, Register rs);
+    void emit_la(Register rd, const std::string& label);
     void emit_lw(Register rd, Register rs1, int32_t offset);
     void emit_sw(Register rs2, Register rs1, int32_t offset);
     void emit_ret();
-    void emit_bnez(Register rs, std::string label);
-    void emit_j(std::string label);
+    void emit_call_label(const std::string& label);
+    void emit_bnez(Register rs, const std::string& label);
+    void emit_j(const std::string& label);
+    std::string basic_block_label(const rewind_ir::IRBasicBlock& block) const;
 
     static bool fits_i12(int32_t value);
     static const char* reg_name(Register reg);
+    static Register arg_reg(size_t index);
     static std::string sanitize_symbol(std::string_view name);
 
     std::ostream& out_;

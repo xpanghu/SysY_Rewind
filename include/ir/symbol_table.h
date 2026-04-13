@@ -11,6 +11,7 @@ namespace rewind_ir
 {
 
 class IRValue;
+class IRFunction;
 
 class SymbolTable
 {
@@ -28,6 +29,9 @@ private:
     // Scope stack + mapping of constants or variables
     std::vector<std::unordered_map<std::string, Payload>> scopes_;
 
+    // Module-global function table
+    std::unordered_map<std::string, IRFunction*> func_table_;
+
 public:
     SymbolTable() = default;
 
@@ -39,9 +43,13 @@ public:
 
     void define_const(const std::string& name, int32_t value);
 
-    std::optional<std::variant<int32_t, IRValue*>> lookup(const std::string& name) const;
+    std::optional<std::variant<int32_t, IRValue*>> lookup_value(const std::string& name) const;
 
     void define_var(const std::string& name, IRValue* alloc);
+
+    void define_function(const std::string& name, IRFunction* func);
+
+    IRFunction* lookup_function(const std::string& name) const;
 };
 
 } // namespace rewind_ir

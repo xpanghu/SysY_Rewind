@@ -53,7 +53,9 @@ std::string_view btype_to_cstr(BType type);
 class BaseAST;
 class CompUnitAST;
 class FuncDefAST;
+class FuncFParamAST;
 class FuncTypeAST;
+class FuncRParamsAST;
 class BlockAST;
 class StmtAST;
 class ExpAST;
@@ -83,7 +85,7 @@ public:
 class CompUnitAST : public BaseAST
 {
 public:
-    std::unique_ptr<BaseAST> func_def;
+    std::vector<std::unique_ptr<BaseAST>> items;
 
     void Dump(std::ostream& out, int indent = 0) const override;
 };
@@ -95,6 +97,7 @@ public:
     std::unique_ptr<BaseAST> func_type;
     std::string ident;
     std::unique_ptr<BaseAST> block;
+    std::vector<std::unique_ptr<BaseAST>> func_f_params;
 
     void Dump(std::ostream& out, int indent = 0) const override;
 };
@@ -106,6 +109,24 @@ public:
     std::string type;
 
     void Dump(std::ostream& out, int indent = 0) const override;
+};
+
+// FuncFParam
+class FuncFParamAST : public BaseAST
+{
+public:
+    BType type = BType::INT;
+    std::string ident;
+    void Dump(std::ostream& out, int ident = 0) const override;
+};
+
+// FuncRParams
+class FuncRParamsAST : public BaseAST
+{
+public:
+    std::vector<std::unique_ptr<BaseAST>> exps;
+
+    void Dump(std::ostream& out, int ident = 0) const override;
 };
 
 // BlockAST
@@ -375,7 +396,12 @@ public:
         std::unique_ptr<BaseAST> exp;
     };
 
-    using Payload = std::variant<Primary, Unary>;
+    struct FuncCall {
+        std::string ident;
+        std::unique_ptr<BaseAST> func_r_params; // may be empty
+    };
+
+    using Payload = std::variant<Primary, Unary, FuncCall>;
     Payload payload;
 
     void Dump(std::ostream& out, int indent = 0) const override;

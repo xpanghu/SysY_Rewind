@@ -26,6 +26,7 @@ public:
     explicit IRType(IRTypeTag t) : tag(t)
     {
     }
+
     virtual ~IRType() = default;
 
     // 类型谓词
@@ -84,7 +85,10 @@ public:
     const IRType* element_type;
     const size_t length;
 
-    IRArrayType(const IRType* elem, size_t len) : IRType(IRTypeTag::ARRAY), element_type(elem), length(len)
+    IRArrayType(const IRType* elem, size_t len) :
+        IRType(IRTypeTag::ARRAY),
+        element_type(elem),
+        length(len)
     {
     }
 };
@@ -95,7 +99,9 @@ class IRPointerType : public IRType
 public:
     const IRType* base_type;
 
-    IRPointerType(const IRType* base) : IRType(IRTypeTag::POINTER), base_type(base)
+    IRPointerType(const IRType* base) :
+        IRType(IRTypeTag::POINTER),
+        base_type(base)
     {
     }
 };
@@ -107,7 +113,10 @@ public:
     const std::vector<const IRType*> params;
     const IRType* return_type;
 
-    IRFunctionType(std::vector<const IRType*> p, const IRType* ret) : IRType(IRTypeTag::FUNCTION), params(std::move(p)), return_type(ret)
+    IRFunctionType(std::vector<const IRType*> p, const IRType* ret) :
+        IRType(IRTypeTag::FUNCTION),
+        params(std::move(p)),
+        return_type(ret)
     {
     }
 };

@@ -1,6 +1,7 @@
 #include <cstdint>
 #include <iostream>
 #include "riscv.h"
+#include "ir_type.h"
 #include "rewind_ir.h"
 #include <cctype>
 #include <ostream>
@@ -13,6 +14,8 @@ namespace
 {
 
 constexpr int32_t kWordSize = 4;
+constexpr int32_t align = 16;
+constexpr size_t kArgRegisterCount = 8;
 
 const int32_t* find_slot(const std::unordered_map<const rewind_ir::IRValue*, int32_t>& slots,
                          const rewind_ir::IRValue* value)
@@ -26,12 +29,15 @@ const int32_t* find_slot(const std::unordered_map<const rewind_ir::IRValue*, int
 
 } // namespace
 
+// ? further adjustments are needed
 bool FunctionFrame::produces_stack_value(const rewind_ir::IRValue& value)
 {
     switch (value.kind_) {
     case rewind_ir::IRValueKind::IR_BINARY:
     case rewind_ir::IRValueKind::IR_LOAD:
         return true;
+    case rewind_ir::IRValueKind::IR_CALL:
+        return value.type_ != nullptr && !value.type_->is_unit();
     default:
         return false;
     }
@@ -56,29 +62,68 @@ int32_t FunctionFrame::align_to(int32_t value, int32_t align)
 /*
  | previous function stack frame |     high address
  | ----------------------------- |
- |       saved registers         |
+ |       return address          |
  |       local variables         |
  |       temp values             | <-- inst result
- |       function params         |     low address
- | ----------------------------- |
- |                               | <-- sp register address
+ |       function params         |
+ |       (tenth param)           |
+ |       (ninth param)           |
+ | ----------------------------- | <-- sp register address
+ |                               |
+ |                               |     low address
  * the design of stack frame
- * 1. low address part stores function param slots
- * 2. then stores local variable object slots and IR median slots
- * 3. align 16 bytes
- * return address is currently stored in ra
- * improve: return address store in stack frame
+ * 1. low address part stores outgoing call arguments beyond a0-a7
+ * 2. then stores local variable object slots and IR median result slots
+ * 3. if this function contains a call, save ra at sp + frame_size - kWordSize
+ * 4. align stack frame size to 16 bytes
  */
-
-// ! return address store in ra register , not store in stack frame
 void FunctionFrame::build(const rewind_ir::IRFunction& func)
 {
-    next_slot_offset_ = 0;
-    frame_size_ = 16;
-    // ra_offset_ = 12;
     object_slots_.clear();
     value_slots_.clear();
+    next_slot_offset_ = 0;
+    frame_size_ = 0;
+    ra_offset_ = 0;
+    outgoing_arg_size_ = 0;
+    has_saved_ra_ = false;
+    size_t max_func_param_size = 0;
+    int32_t payload_size = 0;
 
+    // first traversal to cal frame stack size
+    for (const auto* block : func.basic_blocks_) {
+        for (const auto* inst : block->insts_) {
+            if (inst->kind_ == rewind_ir::IRValueKind::IR_CALL) {
+                const auto* call_inst = inst->as<rewind_ir::IRCallInst>();
+                has_saved_ra_ = true;
+                max_func_param_size = std::max(max_func_param_size, call_inst->args_.size());
+            }
+
+            if (inst->kind_ == rewind_ir::IRValueKind::IR_ALLOC) {
+                const auto* alloc = inst->as<rewind_ir::IRAllocInst>();
+                payload_size += alloc_size(*alloc);
+                continue;
+            }
+
+            if (produces_stack_value(*inst)) {
+                payload_size += kWordSize;
+            }
+        }
+    }
+
+    const auto saved_ra_size = has_saved_ra_ ? kWordSize : 0;
+
+    if (max_func_param_size > kArgRegisterCount) {
+        outgoing_arg_size_ =
+            static_cast<int32_t>((max_func_param_size - kArgRegisterCount) * kWordSize);
+    }
+
+    frame_size_ = align_to(outgoing_arg_size_ + payload_size + saved_ra_size, align);
+    if (has_saved_ra_) {
+        ra_offset_ = frame_size_ - kWordSize;
+    }
+
+    next_slot_offset_ = outgoing_arg_size_;
+    // second traversal to ensure the location distribution of local variable and inst result
     for (const auto* block : func.basic_blocks_) {
         for (const auto* inst : block->insts_) {
             if (inst->kind_ == rewind_ir::IRValueKind::IR_ALLOC) {
@@ -87,15 +132,32 @@ void FunctionFrame::build(const rewind_ir::IRFunction& func)
                 next_slot_offset_ += alloc_size(*alloc);
                 continue;
             }
+
             if (produces_stack_value(*inst)) {
                 value_slots_.emplace(inst, next_slot_offset_);
                 next_slot_offset_ += kWordSize;
             }
         }
     }
+}
 
-    frame_size_ = align_to(next_slot_offset_, align);
-    // ra_offset_ = frame_size_ - kWordSize;
+// return the stack frame address of the outgoing arg
+int32_t FunctionFrame::outgoing_arg_offset(size_t arg_index) const
+{
+    if (arg_index < kArgRegisterCount) {
+        throw std::runtime_error("outgoing_arg_offset requires stack-passed argument");
+    }
+    const auto stack_index = arg_index - kArgRegisterCount;
+    return static_cast<int32_t>(stack_index * kWordSize);
+}
+
+// return the stack frame address of the call function actual arg
+int32_t FunctionFrame::incoming_stack_arg_offset(size_t arg_index) const
+{
+    if (arg_index < kArgRegisterCount) {
+        throw std::runtime_error("incoming_stack_arg_offset requires stack-passed argument");
+    }
+    return frame_size_ + outgoing_arg_offset(arg_index);
 }
 
 bool FunctionFrame::has_object_slot(const rewind_ir::IRValue* value) const
@@ -154,8 +216,46 @@ const char* IREmitter::reg_name(Register reg)
         return "t2";
     case Register::a0:
         return "a0";
+    case Register::a1:
+        return "a1";
+    case Register::a2:
+        return "a2";
+    case Register::a3:
+        return "a3";
+    case Register::a4:
+        return "a4";
+    case Register::a5:
+        return "a5";
+    case Register::a6:
+        return "a6";
+    case Register::a7:
+        return "a7";
     }
     throw std::runtime_error("unknown register");
+}
+
+Register IREmitter::arg_reg(size_t index)
+{
+    switch (index) {
+    case 0:
+        return Register::a0;
+    case 1:
+        return Register::a1;
+    case 2:
+        return Register::a2;
+    case 3:
+        return Register::a3;
+    case 4:
+        return Register::a4;
+    case 5:
+        return Register::a5;
+    case 6:
+        return Register::a6;
+    case 7:
+        return Register::a7;
+    default:
+        throw std::runtime_error("too many call arguments");
+    }
 }
 
 /*
@@ -172,7 +272,7 @@ std::string IREmitter::sanitize_symbol(std::string_view name)
     out.reserve(name.size());
     for (char ch : name) {
         const unsigned char uch = static_cast<unsigned char>(ch);
-        // riscv name only allows letters and numbers
+        // riscv name only allows letters , numbers, '_' and '.'
         if (std::isalnum(uch) || ch == '_' || ch == '.') {
             out.push_back(ch);
         } else {
@@ -188,29 +288,66 @@ std::string IREmitter::sanitize_symbol(std::string_view name)
 
 void IREmitter::emit_module(const rewind_ir::IRModule& module)
 {
-    if (!module.global_values_.empty()) {
-        throw std::runtime_error("RISC-V backend does not support global values in this subset");
+    for (const auto* global_value : module.global_values_) {
+        if (!global_value->is_global_alloc()) {
+            throw std::runtime_error(global_value->name_ + "not global alloc");
+        }
+        auto global_alloc = global_value->as<rewind_ir::IRGlobalAllocInst>();
+        emit_global_value(*global_alloc);
     }
 
-    out_ << "  .text\n";
     for (const auto* func : module.funcs_) {
-        out_ << "  .globl " << sanitize_symbol(func->name_) << "\n";
-    }
-    out_ << "\n";
-
-    for (const auto* func : module.funcs_) {
+        if (func->is_declaration_) {
+            continue;
+        }
         emit_function(*func);
     }
 }
 
+void IREmitter::emit_global_value(const rewind_ir::IRGlobalAllocInst& global_alloc)
+{
+    if (global_alloc.type_ == nullptr || !global_alloc.type_->is_pointer()) {
+        throw std::runtime_error("global alloc must have pointer type");
+    }
+
+    const std::string& name = sanitize_symbol(global_alloc.name_);
+
+    out_ << "  .data\n";
+    out_ << "  .global " << name << "\n";
+    out_ << name << ":\n";
+
+    if (global_alloc.init_ == nullptr) {
+        throw std::runtime_error("global alloc must have initializer");
+    }
+
+    switch (global_alloc.init_->kind_) {
+    case rewind_ir::IRValueKind::IR_ZERO_INIT: {
+        out_ << "  .zero 4" << "\n";
+        break;
+    }
+    case rewind_ir::IRValueKind::IR_INTEGER: {
+        const auto* init = global_alloc.init_->as<rewind_ir::IRConstant>();
+        out_ << " .word " << init->value_ << "\n";
+        break;
+    }
+    default:
+        throw std::runtime_error("not supported other global initialization kind");
+    }
+
+    out_ << "\n";
+}
+
 void IREmitter::emit_function(const rewind_ir::IRFunction& func)
 {
+    out_ << "  .text\n";
+    out_ << "  .globl " << sanitize_symbol(func.name_) << "\n";
+
+    // cal stack frame size
     current_function_ = &func;
     frame_.build(func);
 
     out_ << sanitize_symbol(func.name_) << ":\n";
     emit_prologue();
-    out_ << "\n";
 
     for (const auto* block : func.basic_blocks_) {
         emit_basic_block(*block);
@@ -219,21 +356,23 @@ void IREmitter::emit_function(const rewind_ir::IRFunction& func)
     out_ << "\n";
 }
 
+std::string IREmitter::basic_block_label(const rewind_ir::IRBasicBlock& block) const
+{
+    if (current_function_ == nullptr) {
+        throw std::runtime_error("basic block label requested without current function");
+    }
+
+    return ".L" + sanitize_symbol(current_function_->name_) + "_"
+           + sanitize_symbol(block.name_);
+}
+
 void IREmitter::emit_basic_block(const rewind_ir::IRBasicBlock& block)
 {
-    // ? dont't need to print block name
-    // if (current_function_ != nullptr && !current_function_->basic_blocks_.empty() && current_function_->basic_blocks_.front() != &block) {
-    // out_ << "." << sanitize_symbol(current_function_->name_) << "_"
-    //<< sanitize_symbol(block.name_) << ":\n";
-    //}
-    const auto& bb_name = sanitize_symbol(block.name_);
-    out_ << bb_name << ":\n";
+    out_ << basic_block_label(block) << ":\n";
 
     for (const auto* inst : block.insts_) {
         emit_instruction(*inst);
     }
-
-    out_ << "\n";
 }
 
 void IREmitter::emit_instruction(const rewind_ir::IRValue& inst)
@@ -250,6 +389,9 @@ void IREmitter::emit_instruction(const rewind_ir::IRValue& inst)
         return;
     case rewind_ir::IRValueKind::IR_BINARY:
         emit_binary(*inst.as<rewind_ir::IRBinaryInst>());
+        return;
+    case rewind_ir::IRValueKind::IR_CALL:
+        emit_call(*inst.as<rewind_ir::IRCallInst>());
         return;
     case rewind_ir::IRValueKind::IR_RETURN:
         emit_return(*inst.as<rewind_ir::IRReturnInst>());
@@ -271,6 +413,28 @@ void IREmitter::emit_instruction(const rewind_ir::IRValue& inst)
 
 // ===== IR instruction lowering =====
 
+void IREmitter::emit_call(const rewind_ir::IRCallInst& inst)
+{
+    const auto register_arg_count = std::min(inst.args_.size(), kArgRegisterCount);
+
+    // assign registers for args
+    for (size_t i = 0; i < register_arg_count; ++i) {
+        materialize_value(inst.args_[i], arg_reg(i));
+    }
+
+    // assign additional arg to the stack frame
+    for (size_t i = kArgRegisterCount; i < inst.args_.size(); ++i) {
+        materialize_value(inst.args_[i], Register::t0);
+        emit_stack_store(Register::t0, frame_.outgoing_arg_offset(i));
+    }
+
+    emit_call_label(sanitize_symbol(inst.callee_->name_));
+
+    if (!inst.type_->is_unit()) {
+        spill_value(&inst, Register::a0);
+    }
+}
+
 // branch inst
 void IREmitter::emit_branch(const rewind_ir::IRBranchInst& inst)
 {
@@ -282,16 +446,16 @@ void IREmitter::emit_branch(const rewind_ir::IRBranchInst& inst)
         throw std::runtime_error("branch condition not found");
     }
 
-    const auto& if_label = sanitize_symbol(inst.if_basic_block_->name_);
+    const auto if_label = basic_block_label(*inst.if_basic_block_);
     emit_bnez(Register::t0, if_label);
-    const auto& else_label = sanitize_symbol(inst.else_basic_block_->name_);
+    const auto else_label = basic_block_label(*inst.else_basic_block_);
     emit_j(else_label);
 }
 
 // jump to other inst
 void IREmitter::emit_jump(const rewind_ir::IRJumpInst& inst)
 {
-    const auto& label = sanitize_symbol(inst.jump_basic_block_->name_);
+    const auto label = basic_block_label(*inst.jump_basic_block_);
     emit_j(label);
 }
 
@@ -306,32 +470,15 @@ void IREmitter::emit_alloc(const rewind_ir::IRAllocInst& inst)
 // sw reg stack_frame
 void IREmitter::emit_store(const rewind_ir::IRStoreInst& inst)
 {
-    // step 1 : load value to register t0
+    // step 1 : load inst.value_ to register t0
     materialize_value(inst.value_, Register::t0);
-
-    // step2 : check dest type
-    // local variable type
-    // directly store value to stack
-    if (frame_.has_object_slot(inst.dest_)) {
-        emit_stack_store(Register::t0, frame_.object_slot(inst.dest_));
-    } else {
-        throw std::runtime_error(inst.dest_->name_ + " is not variable");
-    }
+    store_to_addressable(inst.dest_, Register::t0);
 }
 
-// emit load inst
-// lw reg stack_frame or li reg imm12
-// spill_value
 void IREmitter::emit_load(const rewind_ir::IRLoadInst& inst)
 {
-    // check src type
-    if (frame_.has_object_slot(inst.src_)) {
-        // local variable
-        // load value from stack
-        emit_stack_load(Register::t0, frame_.object_slot(inst.src_));
-    } else {
-        throw std::runtime_error(inst.src_->name_ + " is not variable");
-    }
+    // "load" inst.src_ to t0
+    materialize_value(inst.src_, Register::t0);
 
     // store inst result to stack frame(inst)
     spill_value(&inst, Register::t0);
@@ -406,7 +553,9 @@ void IREmitter::emit_binary(const rewind_ir::IRBinaryInst& inst)
 // emit return inst
 void IREmitter::emit_return(const rewind_ir::IRReturnInst& inst)
 {
-    materialize_value(inst.dst_, Register::a0);
+    if (inst.dst_ != nullptr) {
+        materialize_value(inst.dst_, Register::a0);
+    }
     emit_epilogue();
     emit_ret();
 }
@@ -418,13 +567,31 @@ void IREmitter::materialize_value(const rewind_ir::IRValue* value, Register dst)
 {
     // maybe throw runtime error
     if (value == nullptr) {
-        emit_li(dst, 0);
-        return;
+        throw std::runtime_error("materialize_value received nullptr");
     }
 
     // immediate
     if (value->kind_ == rewind_ir::IRValueKind::IR_INTEGER) {
         emit_li(dst, value->as<rewind_ir::IRConstant>()->value_);
+        return;
+    }
+
+    // func arg
+    if (value->kind_ == rewind_ir::IRValueKind::FUNC_ARG_REF) {
+        const auto* arg = value->as<rewind_ir::IRFuncArgRef>();
+        if (arg->index_ < kArgRegisterCount) {
+            emit_mv(dst, arg_reg(arg->index_));
+        } else {
+            emit_stack_load(dst, frame_.incoming_stack_arg_offset(arg->index_));
+        }
+        return;
+    }
+
+    // variable (global variable)
+    if (value->kind_ == rewind_ir::IRValueKind::IR_GLOBALALLOC) {
+        const auto* global_alloc = value->as<rewind_ir::IRGlobalAllocInst>();
+        emit_la(dst, sanitize_symbol(global_alloc->name_));
+        emit_lw(dst, dst, 0);
         return;
     }
 
@@ -435,13 +602,31 @@ void IREmitter::materialize_value(const rewind_ir::IRValue* value, Register dst)
     }
 
     // variable (local variable)
-    // load value from stack slot
     if (frame_.has_object_slot(value)) {
         emit_stack_load(dst, frame_.object_slot(value));
         return;
     }
 
     throw std::runtime_error("cannot materialize IR value: " + value->name_);
+}
+
+void IREmitter::store_to_addressable(const rewind_ir::IRValue* value, Register src)
+{
+    // local variable
+    if (frame_.has_object_slot(value)) {
+        emit_stack_store(src, frame_.object_slot(value));
+        return;
+    }
+
+    // global variable
+    if (value->kind_ == rewind_ir::IRValueKind::IR_GLOBALALLOC) {
+        const auto* global_alloc = value->as<rewind_ir::IRGlobalAllocInst>();
+        emit_la(Register::t1, sanitize_symbol(global_alloc->name_));
+        emit_sw(src, Register::t1, 0);
+        return;
+    }
+
+    throw std::runtime_error(value->name_ + " is not addressable");
 }
 
 // store src(inst result) to stack
@@ -459,28 +644,36 @@ void IREmitter::spill_value(const rewind_ir::IRValue* value, Register src)
 void IREmitter::emit_prologue()
 {
     emit_adjust_sp(-frame_.frame_size());
-    // emit_stack_store(Register::ra, frame_.ra_offset());
+    if (frame_.has_saved_ra()) {
+        emit_stack_store(Register::ra, frame_.ra_offset());
+    }
 }
 
 // recover stack frame
 void IREmitter::emit_epilogue()
 {
-    // emit_stack_load(Register::ra, frame_.ra_offset());
+    if (frame_.has_saved_ra()) {
+        emit_stack_load(Register::ra, frame_.ra_offset());
+    }
     emit_adjust_sp(frame_.frame_size());
 }
 
 // adjust sp
 void IREmitter::emit_adjust_sp(int32_t delta)
 {
-    // imm range is [-2048, 2047]
-    // check if imm out of range
+    // no need to allocate stack frames
+    if (delta == 0) {
+        return;
+    }
+
+    // imm12 range is [-2048, 2047]
+    // check if delta out of range
     if (fits_i12(delta)) {
         emit_addi(Register::sp, Register::sp, delta);
         return;
     }
 
-    // imm out of range
-    // load imm to t0 then add sp t0 to sp
+    // load delta to t0 then add sp t0 to sp
     emit_li(Register::t0, delta);
     emit_add(Register::sp, Register::sp, Register::t0);
 }
@@ -509,6 +702,10 @@ void IREmitter::emit_stack_load(Register rd, int32_t offset, Register scratch)
     if (fits_i12(offset)) {
         emit_lw(rd, Register::sp, offset);
         return;
+    }
+
+    if (scratch == rd) {
+        throw std::runtime_error("stack load scratch register conflicts with destination register");
     }
 
     // if imm out of range, use scrath register to store stack frame address
@@ -633,6 +830,11 @@ void IREmitter::emit_snez(Register rd, Register rs)
     out_ << "  snez " << reg_name(rd) << ", " << reg_name(rs) << "\n";
 }
 
+void IREmitter::emit_la(Register rd, const std::string& label)
+{
+    out_ << "  la " << reg_name(rd) << ", " << label << "\n";
+}
+
 void IREmitter::emit_lw(Register rd, Register rs1, int32_t offset)
 {
     out_ << "  lw " << reg_name(rd) << ", " << offset
@@ -650,12 +852,17 @@ void IREmitter::emit_ret()
     out_ << "  ret\n";
 }
 
-void IREmitter::emit_bnez(Register rs, std::string label)
+void IREmitter::emit_call_label(const std::string& label)
+{
+    out_ << "  call " << label << "\n";
+}
+
+void IREmitter::emit_bnez(Register rs, const std::string& label)
 {
     out_ << "  bnez " << reg_name(rs) << ", " << label << "\n";
 }
 
-void IREmitter::emit_j(std::string label)
+void IREmitter::emit_j(const std::string& label)
 {
     out_ << "  j " << label << "\n";
 }

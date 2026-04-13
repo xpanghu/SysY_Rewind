@@ -1,10 +1,11 @@
 #include "ast.h"
 
-namespace ast_dump_detail {
+namespace ast_dump_detail
+{
 
 IndentToken indent(int n)
 {
-    return { n };
+    return {n};
 }
 
 std::ostream& operator<<(std::ostream& out, IndentToken token)
@@ -78,8 +79,8 @@ std::string_view btype_to_cstr(BType type)
 void CompUnitAST::Dump(std::ostream& out, int indent) const
 {
     out << ast_dump_detail::indent(indent) << "CompUnitAST {\n";
-    if (func_def) {
-        func_def->Dump(out, indent + 2);
+    for (const auto& item : items) {
+        item->Dump(out, indent + 2);
         out << "\n";
     }
     out << ast_dump_detail::indent(indent) << "}";
@@ -105,6 +106,29 @@ void FuncDefAST::Dump(std::ostream& out, int indent) const
 void FuncTypeAST::Dump(std::ostream& out, int indent) const
 {
     out << ast_dump_detail::indent(indent) << "FuncTypeAST { type: " << type << " }";
+}
+
+void FuncFParamAST::Dump(std::ostream& out, int indent) const
+{
+    out << ast_dump_detail::indent(indent) << "FuncFParamAST {\n";
+    out << ast_dump_detail::indent(indent + 2) << "type: "
+        << ast_dump_detail::btype_to_cstr(type) << "\n";
+    out << ast_dump_detail::indent(indent + 2) << "ident: " << ident << "\n";
+    out << ast_dump_detail::indent(indent) << "}";
+}
+
+void FuncRParamsAST::Dump(std::ostream& out, int indent) const
+{
+    out << ast_dump_detail::indent(indent) << "FuncRParamsAST {\n";
+    out << ast_dump_detail::indent(indent + 2) << "args: [\n";
+    for (const auto& exp : exps) {
+        if (exp) {
+            exp->Dump(out, indent + 4);
+            out << "\n";
+        }
+    }
+    out << ast_dump_detail::indent(indent + 2) << "]\n";
+    out << ast_dump_detail::indent(indent) << "}";
 }
 
 void DeclAST::Dump(std::ostream& out, int indent) const
@@ -185,7 +209,8 @@ void VarDefAST::Dump(std::ostream& out, int indent) const
                 out << "\n";
             }
         }
-    }, payload);
+    },
+               payload);
     out << ast_dump_detail::indent(indent) << "}";
 }
 
@@ -281,7 +306,7 @@ void StmtAST::Dump(std::ostream& out, int indent) const
                 << "\n";
         }
     },
-        payload);
+               payload);
     out << ast_dump_detail::indent(indent) << "}";
 }
 
@@ -322,7 +347,7 @@ void LOrExpAST::Dump(std::ostream& out, int indent) const
             }
         }
     },
-        payload);
+               payload);
     out << ast_dump_detail::indent(indent) << "}";
 }
 
@@ -353,7 +378,7 @@ void LAndExpAST::Dump(std::ostream& out, int indent) const
             }
         }
     },
-        payload);
+               payload);
     out << ast_dump_detail::indent(indent) << "}";
 }
 
@@ -384,7 +409,7 @@ void EqExpAST::Dump(std::ostream& out, int indent) const
             }
         }
     },
-        payload);
+               payload);
     out << ast_dump_detail::indent(indent) << "}";
 }
 
@@ -415,7 +440,7 @@ void RelExpAST::Dump(std::ostream& out, int indent) const
             }
         }
     },
-        payload);
+               payload);
     out << ast_dump_detail::indent(indent) << "}";
 }
 
@@ -446,7 +471,7 @@ void AddExpAST::Dump(std::ostream& out, int indent) const
             }
         }
     },
-        payload);
+               payload);
     out << ast_dump_detail::indent(indent) << "}";
 }
 
@@ -477,7 +502,7 @@ void MulExpAST::Dump(std::ostream& out, int indent) const
             }
         }
     },
-        payload);
+               payload);
     out << ast_dump_detail::indent(indent) << "}";
 }
 
@@ -500,9 +525,17 @@ void UnaryExpAST::Dump(std::ostream& out, int indent) const
                 v.exp->Dump(out, indent + 4);
                 out << "\n";
             }
+        } else if constexpr (std::is_same_v<T, FuncCall>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: call\n";
+            out << ast_dump_detail::indent(indent + 2) << "callee: " << v.ident << "\n";
+            if (v.func_r_params) {
+                out << ast_dump_detail::indent(indent + 2) << "args:\n";
+                v.func_r_params->Dump(out, indent + 4);
+                out << "\n";
+            }
         }
     },
-        payload);
+               payload);
     out << ast_dump_detail::indent(indent) << "}";
 }
 
@@ -525,6 +558,6 @@ void PrimaryExpAST::Dump(std::ostream& out, int indent) const
             out << ast_dump_detail::indent(indent + 2) << "ident: " << v.ident << "\n";
         }
     },
-        payload);
+               payload);
     out << ast_dump_detail::indent(indent) << "}";
 }

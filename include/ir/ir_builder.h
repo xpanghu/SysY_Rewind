@@ -28,8 +28,12 @@ public:
 private:
     // traverse ast and generate IR
     void lower_comp_unit(const CompUnitAST& ast, IRModule& module);
+    void declare_library_function(IRModule& module);
+    IRFunction* declare_function(const FuncDefAST& ast, IRModule& module);
+    void lower_gloabl_decl(const DeclAST& ast, IRModule& module);
     IRFunction* lower_func_def(const FuncDefAST& ast, IRModule& module);
     const IRType* lower_func_type(const FuncTypeAST& ast) const;
+    const IRType* lower_func_f_params(const FuncFParamAST& ast);
     void lower_block(const BlockAST& ast, FuncContext& ctx);
     void lower_const_decl(const ConstDeclAST& ast, FuncContext& ctx);
     void lower_var_decl(const VarDeclAST& ast, FuncContext& ctx);
@@ -46,27 +50,39 @@ private:
 
     // eval const value, not return IR
     int32_t eval_exp(const ExpAST& ast, const FuncContext& ctx);
+    int32_t eval_exp(const ExpAST& ast);
     int32_t eval_lor_exp(const LOrExpAST& ast, const FuncContext& ctx);
+    int32_t eval_lor_exp(const LOrExpAST& ast);
     int32_t eval_land_exp(const LAndExpAST& ast, const FuncContext& ctx);
+    int32_t eval_land_exp(const LAndExpAST& ast);
     int32_t eval_eq_exp(const EqExpAST& ast, const FuncContext& ctx);
+    int32_t eval_eq_exp(const EqExpAST& ast);
     int32_t eval_rel_exp(const RelExpAST& ast, const FuncContext& ctx);
+    int32_t eval_rel_exp(const RelExpAST& ast);
     int32_t eval_add_exp(const AddExpAST& ast, const FuncContext& ctx);
+    int32_t eval_add_exp(const AddExpAST& ast);
     int32_t eval_mul_exp(const MulExpAST& ast, const FuncContext& ctx);
+    int32_t eval_mul_exp(const MulExpAST& ast);
     int32_t eval_unary_exp(const UnaryExpAST& ast, const FuncContext& ctx);
+    int32_t eval_unary_exp(const UnaryExpAST& ast);
     int32_t eval_primary_exp(const PrimaryExpAST& ast, const FuncContext& ctx);
+    int32_t eval_primary_exp(const PrimaryExpAST& ast);
 
     // if constant exists, will Reuse previous constant
     IRValue* get_or_create_constant(int32_t value, IRModule& module);
 
-    // first find in function symbol table
-    // then find in module symbol table
     std::optional<std::variant<int32_t, IRValue*>>
-    lookup_symbol(const FuncContext& ctx, const std::string& name) const;
+    lookup_value(const FuncContext& ctx, const std::string& name) const;
+
+    std::optional<std::variant<int32_t, IRValue*>>
+    lookup_value(const std::string& name) const;
+
+    IRFunction* lookup_function(const std::string& name) const;
 
     // cache: int32_t -> IRConstant*
     std::unordered_map<int32_t, IRConstant*> constant_cache_;
 
-    // module-scope symbols: global variables, global consts, and function names
+    // module-scope symbols: global variables, global consts, function
     SymbolTable module_symbols_;
 };
 
