@@ -3,6 +3,7 @@
 #include "ir_type.h"
 #include <cassert>
 #include <memory>
+#include <ratio>
 #include <string>
 #include <type_traits>
 #include <utility>
@@ -80,7 +81,7 @@ class IRBasicBlock;
 class IRValue;
 class IRInstruction;
 
-// ========= IRValue =========
+// IRValue
 class IRValue
 {
     friend class IRModule;
@@ -150,6 +151,16 @@ public:
         return kind_ == IRValueKind::IR_CALL;
     }
 
+    bool is_aggregate() const
+    {
+        return kind_ == IRValueKind::IR_AGGREGATE;
+    }
+
+    bool is_zero_init() const
+    {
+        return kind_ == IRValueKind::IR_ZERO_INIT;
+    }
+
     bool is_func_arg_ref() const
     {
         return kind_ == IRValueKind::FUNC_ARG_REF;
@@ -159,6 +170,22 @@ protected:
     IRValue() = default;
 
     explicit IRValue(IRValueKind k, const IRType* ty, const std::string& name = {}) : name_(name), kind_(k), type_(ty)
+    {
+    }
+};
+
+class IRAggregate : public IRValue
+{
+    friend class IRModule;
+
+public:
+    std::vector<IRValue*> elems_;
+    ~IRAggregate() override = default;
+
+private:
+    explicit IRAggregate(std::vector<IRValue*> elem, const IRType* ty, const std::string& name = {}) :
+        IRValue(IRValueKind::IR_AGGREGATE, ty, name),
+        elems_(std::move(elem))
     {
     }
 };
@@ -176,27 +203,29 @@ public:
 
 private:
     IRConstant() = default;
-    explicit IRConstant(int32_t value, const IRType* ty, const std::string& name = {}) : IRValue(IRValueKind::IR_INTEGER, ty, name), value_(value)
+    explicit IRConstant(int32_t value, const IRType* ty, const std::string& name = {}) :
+        IRValue(IRValueKind::IR_INTEGER, ty, name),
+        value_(value)
     {
     }
 };
 
-class IRInstruction : public IRValue
+// zero initializer
+class IRZeroInit : public IRValue
 {
     friend class IRModule;
 
 public:
-    ~IRInstruction() override = default;
+    ~IRZeroInit() override = default;
 
-protected:
-    IRInstruction() = default;
-
-    explicit IRInstruction(IRValueKind kind, const IRType* ty, const std::string& name = {}) :
-        IRValue(kind, ty, name)
+private:
+    explicit IRZeroInit(const IRType* ty, const std::string& name = {}) :
+        IRValue(IRValueKind::IR_ZERO_INIT, ty, name)
     {
     }
 };
 
+// function formal arg
 class IRFuncArgRef : public IRValue
 {
     friend class IRModule;
@@ -215,6 +244,24 @@ private:
     }
 };
 
+/*
+ * instructon value
+ */
+class IRInstruction : public IRValue
+{
+    friend class IRModule;
+
+public:
+    ~IRInstruction() override = default;
+
+protected:
+    IRInstruction() = default;
+
+    explicit IRInstruction(IRValueKind kind, const IRType* ty, const std::string& name = {}) :
+        IRValue(kind, ty, name)
+    {
+    }
+};
 // FunCall :: = "call" SYMBOL "("[Value{"," Value}] ")"
 // call inst type depends on SYMBOL type
 // name represent inst result
@@ -298,17 +345,50 @@ private:
     }
 };
 
-// zero initializer
-class IRZeroInit : public IRValue
+// GetPointer ::= "getptr" SYMBOL "," Value;
+// SYMBOL is a pointer ptr, type *t
+// Value is offset
+// return ptr + sizeof(t) * Value
+class IRGetPtrInst : public IRInstruction
 {
     friend class IRModule;
 
 public:
-    ~IRZeroInit() override = default;
+    IRValue* src_;
+    IRValue* index_;
+    ~IRGetPtrInst() override = default;
 
 private:
-    explicit IRZeroInit(const IRType* ty, const std::string& name = {}) :
-        IRValue(IRValueKind::IR_ZERO_INIT, ty, name)
+    IRGetPtrInst() = default;
+    explicit IRGetPtrInst(IRValue* src, IRValue* index, const IRType* ty,
+                          const std::string& name = {}) :
+        IRInstruction(IRValueKind::IR_GET_PTR, ty, name),
+        src_(src),
+        index_(index)
+    {
+    }
+};
+
+// GetElementPointer ::= "getelemptr" SYMBOL "," Value;
+// SYMBOL is pointer of array ptr, type *[t, len]
+// Value is offset
+// return ptr + sizeof(t) * Value
+class IRGetElemPtrInst : public IRInstruction
+{
+    friend class IRModule;
+
+public:
+    IRValue* src_;
+    IRValue* index_;
+    ~IRGetElemPtrInst() override = default;
+
+private:
+    IRGetElemPtrInst() = default;
+    explicit IRGetElemPtrInst(IRValue* src, IRValue* index, const IRType* ty,
+                              const std::string& name = {}) :
+        IRInstruction(IRValueKind::IR_GET_ELEM_PTR, ty, name),
+        src_(src),
+        index_(index)
     {
     }
 };
@@ -454,7 +534,7 @@ class IRFunction
     friend class IRModule;
 
 public:
-    const IRType* type_; // example: function<[i32], i32>）
+    const IRFunctionType* type_;
     std::string name_;
     std::vector<IRBasicBlock*> basic_blocks_;
     std::vector<IRValue*> params_;
@@ -462,7 +542,7 @@ public:
 
 private:
     IRFunction() = default;
-    explicit IRFunction(const IRType* type, const std::string& name, bool is_declaration = false) :
+    explicit IRFunction(const IRFunctionType* type, const std::string& name, bool is_declaration = false) :
         type_(type),
         name_(name),
         basic_blocks_({}),
@@ -483,7 +563,7 @@ public:
     IRModule(IRModule&&) noexcept = default;
     IRModule& operator=(IRModule&&) noexcept = default;
 
-    IRFunction* make_function(const IRType* type, const std::string& name,
+    IRFunction* make_function(const IRFunctionType* type, const std::string& name,
                               bool is_declaration = false);
 
     IRBasicBlock* make_basic_block(const std::string& name, std::vector<IRValue*> insts = {});
@@ -510,7 +590,7 @@ private:
     std::vector<std::unique_ptr<IRValue>> value_storage_;
 };
 
-inline IRFunction* IRModule::make_function(const IRType* type, const std::string& name,
+inline IRFunction* IRModule::make_function(const IRFunctionType* type, const std::string& name,
                                            bool is_declaration)
 {
     std::unique_ptr<IRFunction> func(new IRFunction(type, name, is_declaration));

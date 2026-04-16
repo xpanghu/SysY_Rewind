@@ -27,14 +27,36 @@ const int32_t* find_slot(const std::unordered_map<const rewind_ir::IRValue*, int
     return &it->second;
 }
 
+// return the base type of pointer
+const rewind_ir::IRType* storage_base_type(const rewind_ir::IRValue* value)
+{
+    if (value == nullptr || value->type_ == nullptr || !value->type_->is_pointer()) {
+        return nullptr;
+    }
+    return value->type_->as<rewind_ir::IRPointerType>()->base_type;
+}
+
+// return array type
+const rewind_ir::IRArrayType* storage_array_type(const rewind_ir::IRValue* value)
+{
+    const auto* base_type = storage_base_type(value);
+    if (base_type == nullptr || !base_type->is_array()) {
+        return nullptr;
+    }
+    return base_type->as<rewind_ir::IRArrayType>();
+}
+
 } // namespace
 
+// todo : directly cal type size
 // ? further adjustments are needed
 bool FunctionFrame::produces_stack_value(const rewind_ir::IRValue& value)
 {
     switch (value.kind_) {
     case rewind_ir::IRValueKind::IR_BINARY:
     case rewind_ir::IRValueKind::IR_LOAD:
+    case rewind_ir::IRValueKind::IR_GET_PTR:
+    case rewind_ir::IRValueKind::IR_GET_ELEM_PTR:
         return true;
     case rewind_ir::IRValueKind::IR_CALL:
         return value.type_ != nullptr && !value.type_->is_unit();
@@ -54,9 +76,10 @@ int32_t FunctionFrame::alloc_size(const rewind_ir::IRAllocInst& inst)
     return static_cast<int32_t>(size == 0 ? kWordSize : size);
 }
 
+// align must be power of 2
 int32_t FunctionFrame::align_to(int32_t value, int32_t align)
 {
-    return ((value + align - 1) / align) * align;
+    return (value + align - 1) & ~(align - 1);
 }
 
 /*
@@ -322,12 +345,36 @@ void IREmitter::emit_global_value(const rewind_ir::IRGlobalAllocInst& global_all
 
     switch (global_alloc.init_->kind_) {
     case rewind_ir::IRValueKind::IR_ZERO_INIT: {
-        out_ << "  .zero 4" << "\n";
+        auto* init = global_alloc.init_->as<rewind_ir::IRZeroInit>();
+        if (init->type_->is_int32()) {
+            out_ << "  .zero 4" << "\n";
+        } else if (init->type_->is_array()) {
+            {
+                int32_t len = init->type_->as<rewind_ir::IRArrayType>()->length;
+                for (int32_t i = 0; i < len; i++) {
+                    out_ << "  .zero 4" << "\n";
+                }
+            }
+        } else {
+            throw std::runtime_error("unsupported global init type");
+        }
         break;
     }
     case rewind_ir::IRValueKind::IR_INTEGER: {
         const auto* init = global_alloc.init_->as<rewind_ir::IRConstant>();
         out_ << " .word " << init->value_ << "\n";
+        break;
+    }
+    case rewind_ir::IRValueKind::IR_AGGREGATE: {
+        const auto* init = global_alloc.init_->as<rewind_ir::IRAggregate>();
+        for (const auto* item : init->elems_) {
+            if (item->is_integer()) {
+                const auto* constant = item->as<rewind_ir::IRConstant>();
+                out_ << "  .word " << constant->value_ << "\n";
+            } else {
+                throw std::runtime_error("global array elem is not constant");
+            }
+        }
         break;
     }
     default:
@@ -404,6 +451,9 @@ void IREmitter::emit_instruction(const rewind_ir::IRValue& inst)
     case rewind_ir::IRValueKind::IR_BRANCH:
         emit_branch(*inst.as<rewind_ir::IRBranchInst>());
         return;
+    case rewind_ir::IRValueKind::IR_GET_ELEM_PTR:
+        emit_get_elem_ptr(*inst.as<rewind_ir::IRGetElemPtrInst>());
+        return;
     default:
         break;
     }
@@ -411,7 +461,29 @@ void IREmitter::emit_instruction(const rewind_ir::IRValue& inst)
     throw std::runtime_error("unsupported rewind IR instruction in RISC-V backend: " + inst.name_);
 }
 
-// ===== IR instruction lowering =====
+/*
+ * IR instruction lowering
+ */
+void IREmitter::emit_get_elem_ptr(const rewind_ir::IRGetElemPtrInst& inst)
+{
+    const auto* array_type = storage_array_type(inst.src_);
+    if (array_type == nullptr) {
+        throw std::runtime_error("getelemptr source is not array storage");
+    }
+
+    materialize_pointer(inst.src_, Register::t0);
+    materialize_value(inst.index_, Register::t1);
+
+    const auto elem_size = static_cast<int32_t>(
+        rewind_ir::IRTypeContext::instance().getTypeSize(array_type->element_type));
+    if (elem_size != 1) {
+        emit_li(Register::t2, elem_size);
+        emit_mul(Register::t1, Register::t1, Register::t2);
+    }
+
+    emit_add(Register::t0, Register::t0, Register::t1);
+    spill_value(&inst, Register::t0);
+}
 
 void IREmitter::emit_call(const rewind_ir::IRCallInst& inst)
 {
@@ -470,15 +542,42 @@ void IREmitter::emit_alloc(const rewind_ir::IRAllocInst& inst)
 // sw reg stack_frame
 void IREmitter::emit_store(const rewind_ir::IRStoreInst& inst)
 {
-    // step 1 : load inst.value_ to register t0
+    // store local array
+    if (inst.value_->is_aggregate()) {
+        const auto* array_type = storage_array_type(inst.dest_);
+        if (array_type == nullptr) {
+            throw std::runtime_error("aggregate store destination is not array storage");
+        }
+
+        const auto* aggregate = inst.value_->as<rewind_ir::IRAggregate>();
+        materialize_pointer(inst.dest_, Register::t2);
+        // array elem type size
+        const auto elem_size = static_cast<int32_t>(
+            rewind_ir::IRTypeContext::instance().getTypeSize(array_type->element_type));
+
+        for (size_t i = 0; i < aggregate->elems_.size(); ++i) {
+            materialize_value(aggregate->elems_[i], Register::t0);
+            const auto offset = static_cast<int32_t>(i) * elem_size;
+            if (fits_i12(offset)) {
+                emit_sw(Register::t0, Register::t2, offset);
+            } else {
+                emit_li(Register::t1, offset);
+                emit_add(Register::t1, Register::t2, Register::t1);
+                emit_sw(Register::t0, Register::t1, 0);
+            }
+        }
+        return;
+    }
+
+    // store local variable
     materialize_value(inst.value_, Register::t0);
     store_to_addressable(inst.dest_, Register::t0);
 }
 
 void IREmitter::emit_load(const rewind_ir::IRLoadInst& inst)
 {
-    // "load" inst.src_ to t0
-    materialize_value(inst.src_, Register::t0);
+    materialize_pointer(inst.src_, Register::t0);
+    emit_lw(Register::t0, Register::t0, 0);
 
     // store inst result to stack frame(inst)
     spill_value(&inst, Register::t0);
@@ -560,7 +659,7 @@ void IREmitter::emit_return(const rewind_ir::IRReturnInst& inst)
     emit_ret();
 }
 
-// ===== Operand materialization helpers =====
+// Operand materialization helpers
 
 // load value to dst register
 void IREmitter::materialize_value(const rewind_ir::IRValue* value, Register dst)
@@ -610,6 +709,7 @@ void IREmitter::materialize_value(const rewind_ir::IRValue* value, Register dst)
     throw std::runtime_error("cannot materialize IR value: " + value->name_);
 }
 
+// store dst register to the address of value
 void IREmitter::store_to_addressable(const rewind_ir::IRValue* value, Register src)
 {
     // local variable
@@ -626,7 +726,39 @@ void IREmitter::store_to_addressable(const rewind_ir::IRValue* value, Register s
         return;
     }
 
+    if (frame_.has_value_slot(value)) {
+        materialize_pointer(value, Register::t1);
+        emit_sw(src, Register::t1, 0);
+        return;
+    }
+
     throw std::runtime_error(value->name_ + " is not addressable");
+}
+
+//
+void IREmitter::materialize_pointer(const rewind_ir::IRValue* value, Register dst)
+{
+    if (value == nullptr) {
+        throw std::runtime_error("materialize_pointer received nullptr");
+    }
+
+    if (value->kind_ == rewind_ir::IRValueKind::IR_GLOBALALLOC) {
+        const auto* global_alloc = value->as<rewind_ir::IRGlobalAllocInst>();
+        emit_la(dst, sanitize_symbol(global_alloc->name_));
+        return;
+    }
+
+    if (frame_.has_object_slot(value)) {
+        emit_stack_address(dst, frame_.object_slot(value));
+        return;
+    }
+
+    if (frame_.has_value_slot(value)) {
+        emit_stack_load(dst, frame_.value_slot(value));
+        return;
+    }
+
+    throw std::runtime_error("cannot materialize IR pointer: " + value->name_);
 }
 
 // store src(inst result) to stack
@@ -696,7 +828,7 @@ void IREmitter::emit_stack_address(Register rd, int32_t offset, Register scratch
     emit_add(rd, Register::sp, scratch);
 }
 
-// load stack value to rd
+// load the value of stack address to rd
 void IREmitter::emit_stack_load(Register rd, int32_t offset, Register scratch)
 {
     if (fits_i12(offset)) {

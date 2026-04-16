@@ -160,22 +160,60 @@ void ConstDeclAST::Dump(std::ostream& out, int indent) const
 void ConstDefAST::Dump(std::ostream& out, int indent) const
 {
     out << ast_dump_detail::indent(indent) << "ConstDefAST {\n";
-    out << ast_dump_detail::indent(indent + 2) << "ident: " << ident << "\n";
-    if (const_init_val) {
-        out << ast_dump_detail::indent(indent + 2) << "init_val:\n";
-        const_init_val->Dump(out, indent + 4);
-        out << "\n";
-    }
+    std::visit([&](const auto& value) {
+        using T = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<T, ConstExpr>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: scalar\n";
+            out << ast_dump_detail::indent(indent + 2) << "ident: " << value.ident << "\n";
+            if (value.const_init_val) {
+                out << ast_dump_detail::indent(indent + 2) << "init_val:\n";
+                value.const_init_val->Dump(out, indent + 4);
+                out << "\n";
+            }
+        } else if constexpr (std::is_same_v<T, ConstArray>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: array\n";
+            out << ast_dump_detail::indent(indent + 2) << "ident: " << value.ident << "[";
+            for (size_t i = 0; i < value.const_dims.size(); ++i) {
+                if (i > 0) out << "][";
+                if (value.const_dims[i]) {
+                    value.const_dims[i]->Dump(out, 0);
+                }
+                out << "]";
+            }
+            out << "\n";
+            if (value.const_init_val) {
+                out << ast_dump_detail::indent(indent + 2) << "init_val:\n";
+                value.const_init_val->Dump(out, indent + 4);
+                out << "\n";
+            }
+        }
+    },
+               payload);
     out << ast_dump_detail::indent(indent) << "}";
 }
 
 void ConstInitValAST::Dump(std::ostream& out, int indent) const
 {
     out << ast_dump_detail::indent(indent) << "ConstInitValAST {\n";
-    if (const_exp) {
-        const_exp->Dump(out, indent + 2);
-        out << "\n";
-    }
+    std::visit([&](const auto& value) {
+        using T = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<T, ConstExprInit>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: scalar\n";
+            if (value.const_exp) {
+                value.const_exp->Dump(out, indent + 4);
+                out << "\n";
+            }
+        } else if constexpr (std::is_same_v<T, ConstArrayInit>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: array\n";
+            for (const auto& exp_item : value.const_inits) {
+                if (exp_item) {
+                    exp_item->Dump(out, indent + 4);
+                    out << "\n";
+                }
+            }
+        }
+    },
+               payload);
     out << ast_dump_detail::indent(indent) << "}";
 }
 
@@ -199,10 +237,39 @@ void VarDefAST::Dump(std::ostream& out, int indent) const
     out << ast_dump_detail::indent(indent) << "VarDefAST {\n";
     std::visit([&](const auto& v) {
         using T = std::decay_t<decltype(v)>;
-        if constexpr (std::is_same_v<T, DefEmpty>) {
+        if constexpr (std::is_same_v<T, UninitializedScalar>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: scalar\n";
             out << ast_dump_detail::indent(indent + 2) << "ident: " << v.ident << "\n";
-        } else if constexpr (std::is_same_v<T, DefValue>) {
+        } else if constexpr (std::is_same_v<T, InitializedScalar>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: scalar\n";
             out << ast_dump_detail::indent(indent + 2) << "ident: " << v.ident << "\n";
+            if (v.init_val) {
+                out << ast_dump_detail::indent(indent + 2) << "init_val:\n";
+                v.init_val->Dump(out, indent + 4);
+                out << "\n";
+            }
+        } else if constexpr (std::is_same_v<T, UninitializedArray>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: array\n";
+            out << ast_dump_detail::indent(indent + 2) << "ident: " << v.ident << "[";
+            for (size_t i = 0; i < v.const_dims.size(); ++i) {
+                if (i > 0) out << "][";
+                if (v.const_dims[i]) {
+                    v.const_dims[i]->Dump(out, 0);
+                }
+                out << "]";
+            }
+            out << "\n";
+        } else if constexpr (std::is_same_v<T, InitializedArray>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: array\n";
+            out << ast_dump_detail::indent(indent + 2) << "ident: " << v.ident << "[";
+            for (size_t i = 0; i < v.const_dims.size(); ++i) {
+                if (i > 0) out << "][";
+                if (v.const_dims[i]) {
+                    v.const_dims[i]->Dump(out, 0);
+                }
+                out << "]";
+            }
+            out << "\n";
             if (v.init_val) {
                 out << ast_dump_detail::indent(indent + 2) << "init_val:\n";
                 v.init_val->Dump(out, indent + 4);
@@ -217,10 +284,25 @@ void VarDefAST::Dump(std::ostream& out, int indent) const
 void InitValAST::Dump(std::ostream& out, int indent) const
 {
     out << ast_dump_detail::indent(indent) << "InitValAST {\n";
-    if (exp) {
-        exp->Dump(out, indent + 2);
-        out << "\n";
-    }
+    std::visit([&](const auto& value) {
+        using T = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<T, ScalarInit>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: scalar\n";
+            if (value.exp) {
+                value.exp->Dump(out, indent + 4);
+                out << "\n";
+            }
+        } else if constexpr (std::is_same_v<T, ArrayInit>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: array\n";
+            for (const auto& exp_item : value.inits) {
+                if (exp_item) {
+                    exp_item->Dump(out, indent + 4);
+                    out << "\n";
+                }
+            }
+        }
+    },
+               payload);
     out << ast_dump_detail::indent(indent) << "}";
 }
 
@@ -250,7 +332,11 @@ void StmtAST::Dump(std::ostream& out, int indent) const
             }
         } else if constexpr (std::is_same_v<T, Assign>) {
             out << ast_dump_detail::indent(indent + 2) << "kind: assign\n";
-            out << ast_dump_detail::indent(indent + 2) << "lval: " << stmt.LVal << "\n";
+            if (stmt.lval) {
+                out << ast_dump_detail::indent(indent + 2) << "lval:\n";
+                stmt.lval->Dump(out, indent + 4);
+                out << "\n";
+            }
             if (stmt.exp) {
                 out << ast_dump_detail::indent(indent + 2) << "exp:\n";
                 stmt.exp->Dump(out, indent + 4);
@@ -555,9 +641,30 @@ void PrimaryExpAST::Dump(std::ostream& out, int indent) const
             }
         } else if constexpr (std::is_same_v<T, LValue>) {
             out << ast_dump_detail::indent(indent + 2) << "kind: lvalue\n";
-            out << ast_dump_detail::indent(indent + 2) << "ident: " << v.ident << "\n";
+            if (v.lval) {
+                v.lval->Dump(out, indent + 4);
+                out << "\n";
+            }
         }
     },
                payload);
+    out << ast_dump_detail::indent(indent) << "}";
+}
+
+void LValAST::Dump(std::ostream& out, int indent) const
+{
+    out << ast_dump_detail::indent(indent) << "LValAST {\n";
+    out << ast_dump_detail::indent(indent + 2) << "ident: " << ident;
+    if (!indices.empty()) {
+        out << "[";
+        for (size_t i = 0; i < indices.size(); ++i) {
+            if (i > 0) out << "][";
+            if (indices[i]) {
+                indices[i]->Dump(out, 0);
+            }
+            out << "]";
+        }
+    }
+    out << "\n";
     out << ast_dump_detail::indent(indent) << "}";
 }

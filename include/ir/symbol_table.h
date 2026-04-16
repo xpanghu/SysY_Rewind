@@ -15,19 +15,21 @@ class IRFunction;
 
 class SymbolTable
 {
-private:
-    struct Const {
+public:
+    struct Constant {
         int32_t value;
     };
 
     struct Var {
         IRValue* alloc;
+        bool is_const = false;
     };
 
-    using Payload = std::variant<Const, Var>;
+    using LookupResult = std::variant<Constant, Var>;
 
+private:
     // Scope stack + mapping of constants or variables
-    std::vector<std::unordered_map<std::string, Payload>> scopes_;
+    std::vector<std::unordered_map<std::string, LookupResult>> scopes_;
 
     // Module-global function table
     std::unordered_map<std::string, IRFunction*> func_table_;
@@ -43,9 +45,9 @@ public:
 
     void define_const(const std::string& name, int32_t value);
 
-    std::optional<std::variant<int32_t, IRValue*>> lookup_value(const std::string& name) const;
+    void define_var(const std::string& name, IRValue* alloc, bool is_const = false);
 
-    void define_var(const std::string& name, IRValue* alloc);
+    std::optional<LookupResult> lookup_value(const std::string& name) const;
 
     void define_function(const std::string& name, IRFunction* func);
 

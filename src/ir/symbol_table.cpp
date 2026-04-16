@@ -27,11 +27,11 @@ void SymbolTable::define_const(const std::string& name, int32_t value)
     if (scope.count(name)) {
         throw std::runtime_error("redefinition of const: " + name);
     }
-    scope[name] = SymbolTable::Const{value};
+    scope[name] = SymbolTable::Constant{value};
 }
 
 // define variable
-void SymbolTable::define_var(const std::string& name, IRValue* alloc)
+void SymbolTable::define_var(const std::string& name, IRValue* alloc, bool is_const)
 {
     if (alloc == nullptr) {
         throw std::runtime_error("define_var: null alloc");
@@ -40,24 +40,14 @@ void SymbolTable::define_var(const std::string& name, IRValue* alloc)
     if (scope.count(name)) {
         throw std::runtime_error("redefinition of variable: " + name);
     }
-    scope[name] = SymbolTable::Var{alloc};
+    scope[name] = SymbolTable::Var{alloc, is_const};
 }
 
-// Search by variable name
-// 1. return int32_t represent const
-// 2. return IRValue* represent variable
-// 3. return nullopt represent not exist
-std::optional<std::variant<int32_t, IRValue*>> SymbolTable::lookup_value(const std::string& name) const
+std::optional<SymbolTable::LookupResult> SymbolTable::lookup_value(const std::string& name) const
 {
     for (auto it = scopes_.rbegin(); it != scopes_.rend(); ++it) {
         if (auto found = it->find(name); found != it->end()) {
-            auto value = found->second;
-            // 查找变量中，查找到常量，语义错误
-            if (std::holds_alternative<SymbolTable::Const>(value)) {
-                return std::get<SymbolTable::Const>(value).value;
-            } else {
-                return std::get<SymbolTable::Var>(value).alloc;
-            }
+            return found->second;
         }
     }
 

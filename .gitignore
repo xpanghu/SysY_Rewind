@@ -1,6 +1,6 @@
+.vscode/
 build/
 debug/
-tests/
-.vscode/
-.clangd
 scripts/
+tests/
+.clangd

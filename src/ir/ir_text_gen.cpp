@@ -69,9 +69,8 @@ void IRTextGen::print_global_value(const IRValue* value, std::ostream& out)
 
     switch (global_alloc->init_->kind_) {
     case IRValueKind::IR_ZERO_INIT:
-        out << "zeroinit";
-        break;
     case IRValueKind::IR_INTEGER:
+    case IRValueKind::IR_AGGREGATE:
         print_value(global_alloc->init_, out);
         break;
     default:
@@ -94,16 +93,16 @@ void IRTextGen::print_function(const IRFunction* previous,
     // function declaration
     if (current->is_declaration_) {
         out << "decl @" << current->name_ << "(";
-        for (size_t i = 0; i < current->params_.size(); ++i) {
+        for (size_t i = 0; i < current->type_->params.size(); ++i) {
             if (i > 0) {
                 out << ", ";
             }
-            print_type(current->params_[i]->type_, out);
+            print_type(current->type_->params[i], out);
         }
         out << ")";
-        if (!current->type_->is_unit()) {
+        if (!current->type_->return_type->is_unit()) {
             out << ": ";
-            print_type(current->type_, out);
+            print_type(current->type_->return_type, out);
         }
         out << "\n";
         return;
@@ -117,13 +116,13 @@ void IRTextGen::print_function(const IRFunction* previous,
         }
         print_value(current->params_[i], out);
         out << ": ";
-        print_type(current->params_[i]->type_, out);
+        print_type(current->type_->params[i], out);
     }
     out << ")";
 
-    if (!current->type_->is_unit()) {
+    if (!current->type_->return_type->is_unit()) {
         out << ": ";
-        print_type(current->type_, out);
+        print_type(current->type_->return_type, out);
     }
 
     out << " {\n";
@@ -203,6 +202,22 @@ void IRTextGen::print_instruction(const IRValue* inst, std::ostream& out)
         print_value(store->dest_, out);
         break;
     }
+    case rewind_ir::IRValueKind::IR_GET_PTR: {
+        const auto* get_ptr = inst->as<IRGetPtrInst>();
+        out << "  " << get_ptr->name_ << " = getptr ";
+        print_value(get_ptr->src_, out);
+        out << ", ";
+        print_value(get_ptr->index_, out);
+        break;
+    }
+    case rewind_ir::IRValueKind::IR_GET_ELEM_PTR: {
+        const auto* get_elem_ptr = inst->as<IRGetElemPtrInst>();
+        out << "  " << get_elem_ptr->name_ << " = getelemptr ";
+        print_value(get_elem_ptr->src_, out);
+        out << ", ";
+        print_value(get_elem_ptr->index_, out);
+        break;
+    }
     case rewind_ir::IRValueKind::IR_CALL: {
         const auto* call = inst->as<IRCallInst>();
         out << "  ";
@@ -248,17 +263,32 @@ void IRTextGen::print_instruction(const IRValue* inst, std::ostream& out)
 }
 
 // print operand
-// const or inst result
 void IRTextGen::print_value(const IRValue* value, std::ostream& out)
 {
-    // const
     if (value->is_integer()) {
         const auto* c = value->as<IRConstant>();
         out << c->value_;
         return;
     }
 
-    // inst result
+    if (value->is_zero_init()) {
+        out << "zeroinit";
+        return;
+    }
+
+    if (value->is_aggregate()) {
+        const auto* aggregate = value->as<IRAggregate>();
+        out << "{";
+        for (size_t i = 0; i < aggregate->elems_.size(); ++i) {
+            if (i > 0) {
+                out << ", ";
+            }
+            print_value(aggregate->elems_[i], out);
+        }
+        out << "}";
+        return;
+    }
+
     out << value->name_;
 }
 
@@ -280,8 +310,9 @@ void IRTextGen::print_type(const IRType* type, std::ostream& out)
     }
     case IRTypeTag::ARRAY: {
         auto* array_type = type->as<IRArrayType>();
-        out << "array[" << array_type->length << " x ";
+        out << "[";
         print_type(array_type->element_type, out);
+        out << ", " << array_type->length;
         out << "]";
         break;
     }

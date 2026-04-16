@@ -106,6 +106,7 @@ private:
     void emit_branch(const rewind_ir::IRBranchInst& inst);
     void emit_jump(const rewind_ir::IRJumpInst& inst);
     void emit_return(const rewind_ir::IRReturnInst& inst);
+    void emit_get_elem_ptr(const rewind_ir::IRGetElemPtrInst& inst);
 
     /*
      * if you only have a IRValue*, use materialize_value

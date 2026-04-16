@@ -9,30 +9,58 @@
 #include <stdexcept>
 #include <variant>
 
-int b = 10;
-int a = 10 + b;
-
 namespace rewind_ir
 {
 namespace
 {
 
 // get i32 type
-inline const IRType* get_i32_type()
+inline const IRInt32Type* get_i32_type()
 {
     return IRTypeContext::instance().getInt32();
 }
 
 // get unit type
-inline const IRType* get_unit_type()
+inline const IRUnitType* get_unit_type()
 {
     return IRTypeContext::instance().getUnit();
 }
 
 // get pointer type
-inline const IRType* get_pointer_type(const IRType* base_type)
+inline const IRPointerType* get_pointer_type(const IRType* base_type)
 {
     return IRTypeContext::instance().getPointer(base_type);
+}
+
+// get array type
+inline const IRArrayType* get_array_type(const IRType* elem, int32_t len)
+{
+    return IRTypeContext::instance().getArray(elem, len);
+}
+
+// get function type
+inline const IRFunctionType* get_function_type(std::vector<const IRType*> params, const IRType* ret)
+{
+    return IRTypeContext::instance().getFunction(std::move(params), ret);
+}
+
+inline const IRArrayType* get_array_storage_type(const IRValue* storage)
+{
+    if (storage == nullptr || storage->type_ == nullptr || !storage->type_->is_pointer()) {
+        return nullptr;
+    }
+
+    const auto* pointer_type = storage->type_->as<IRPointerType>();
+    if (pointer_type->base_type == nullptr || !pointer_type->base_type->is_array()) {
+        return nullptr;
+    }
+
+    return pointer_type->base_type->as<IRArrayType>();
+}
+
+inline bool is_array_storage(const IRValue* storage)
+{
+    return get_array_storage_type(storage) != nullptr;
 }
 
 template <typename T>
@@ -115,7 +143,8 @@ IRFunction* declare_external_function(IRModule& module,
                                       std::vector<const IRType*> param_types,
                                       const IRType* return_type)
 {
-    auto* func = module.make_function(return_type, name, true);
+    auto* function_type = get_function_type(param_types, return_type);
+    auto* func = module.make_function(function_type, name, true);
     module_symbols.define_function(name, func);
 
     for (size_t i = 0; i < param_types.size(); ++i) {
@@ -196,25 +225,31 @@ void RewindIRBuilder::declare_library_function(IRModule& module)
     declare_external_function(module, module_symbols_, "putarray", {i32, i32_ptr}, unit);
 }
 
-IRFunction* RewindIRBuilder::declare_function(const FuncDefAST& ast,
-                                              IRModule& module)
+IRFunction* RewindIRBuilder::declare_function(const FuncDefAST& ast, IRModule& module)
 {
-    // get function return type
-    const auto& func_type = expect_node<FuncTypeAST>(*ast.func_type, "FuncTypeAST");
-    auto return_type = lower_func_type(func_type);
+    // set function type
+    const auto& func_type_ast = expect_node<FuncTypeAST>(*ast.func_type, "FuncTypeAST");
+    auto return_type = lower_func_type(func_type_ast);
+    std::vector<const IRType*> param_types;
+    param_types.reserve(ast.func_f_params.size());
+    for (const auto& item : ast.func_f_params) {
+        const auto& func_f_param = expect_node<FuncFParamAST>(*item, "FuncFParam");
+        param_types.push_back(lower_func_f_params(func_f_param));
+    }
+    auto* function_type = get_function_type(param_types, return_type);
 
-    // define function
-    auto func = module.make_function(return_type, ast.ident);
+    auto func = module.make_function(function_type, ast.ident);
     module_symbols_.define_function(ast.ident, func);
 
     // assign formal args
     // ? Note : not define variable in symbol table
     size_t param_index = 0;
-    for (const auto& item : ast.func_f_params) {
-        const auto& func_f_param = expect_node<FuncFParamAST>(*item, "FuncFParam");
+    for (size_t i = 0; i < ast.func_f_params.size(); ++i) {
+        const auto& func_f_param =
+            expect_node<FuncFParamAST>(*ast.func_f_params[i], "FuncFParam");
         auto* arg_ref = module.make_value<IRFuncArgRef>(
             param_index++,
-            lower_func_f_params(func_f_param),
+            function_type->params[i],
             "@" + func_f_param.ident);
         module.append_param(*func, *arg_ref);
     }
@@ -226,12 +261,65 @@ void RewindIRBuilder::lower_gloabl_decl(const DeclAST& ast, IRModule& module)
     if (const auto* const_decl = dynamic_cast<const ConstDeclAST*>(ast.const_or_var.get())) {
         for (const auto& def_base : const_decl->const_defs) {
             const auto& def = expect_node<ConstDefAST>(*def_base, "ConstDefAST");
-            const auto& init = expect_node<ConstInitValAST>(*def.const_init_val,
-                                                            "ConstInitValAST");
-            const auto& exp = expect_node<ExpAST>(*init.const_exp, "ExpAST");
+            std::visit(
+                overloaded{
+                    [&](const ConstDefAST::ConstExpr& const_expr) {
+                        // get init value
+                        const auto& init =
+                            expect_node<ConstInitValAST>(*const_expr.const_init_val, "ConstInitValAST");
+                        const auto& expr_init =
+                            std::get<ConstInitValAST::ConstExprInit>(init.payload);
+                        const auto& exp = expect_node<ExpAST>(*expr_init.const_exp, "ExpAST");
 
-            auto value = eval_exp(exp);
-            module_symbols_.define_const(def.ident, value);
+                        auto value = eval_exp(exp);
+                        module_symbols_.define_const(const_expr.ident, value);
+                    },
+                    [&](const ConstDefAST::ConstArray& const_array) {
+                        // get array length (first dimension for now)
+                        if (const_array.const_dims.empty()) {
+                            throw std::runtime_error("array must have at least one dimension: "
+                                                     + const_array.ident);
+                        }
+                        const auto& size_exp = expect_node<ExpAST>(*const_array.const_dims[0], "ExpAST");
+                        auto length = eval_exp(size_exp);
+                        if (length <= 0) {
+                            throw std::runtime_error("array length must be positive: "
+                                                     + const_array.ident);
+                        }
+
+                        // get array init
+                        const auto& init_val =
+                            expect_node<ConstInitValAST>(*const_array.const_init_val, "ConstInitValAST");
+                        if (std::holds_alternative<ConstInitValAST::ConstExprInit>(init_val.payload)) {
+                            throw std::runtime_error(const_array.ident + "is array, init must be array");
+                        }
+                        const auto& array_init = std::get<ConstInitValAST::ConstArrayInit>(init_val.payload);
+
+                        std::vector<IRValue*> elems;
+                        elems.reserve(length);
+                        for (const auto& item : array_init.const_inits) {
+                            const auto& const_exp = expect_node<ExpAST>(*item, "ExpAST");
+                            elems.push_back(get_or_create_constant(eval_exp(const_exp), module));
+                        }
+                        if (elems.size() > static_cast<size_t>(length)) {
+                            throw std::runtime_error("too many initializers for const array: "
+                                                     + const_array.ident);
+                        }
+                        elems.resize(length, get_or_create_constant(0, module));
+
+                        // set array type
+                        auto* array_type = get_array_type(get_i32_type(), length);
+
+                        // alloc global const array
+                        auto* init_aggregate = module.make_value<IRAggregate>(std::move(elems), array_type);
+                        auto* global_alloc = module.make_value<IRGlobalAllocInst>(
+                            init_aggregate,
+                            get_pointer_type(array_type),
+                            "@" + const_array.ident);
+                        module.append_global_value(*global_alloc);
+                        module_symbols_.define_var(const_array.ident, global_alloc, true);
+                    }},
+                def.payload);
         }
         return;
     }
@@ -245,30 +333,105 @@ void RewindIRBuilder::lower_gloabl_decl(const DeclAST& ast, IRModule& module)
 
             std::visit(
                 overloaded{
-                    [&](const VarDefAST::DefEmpty& def_empty) {
+                    [&](const VarDefAST::UninitializedScalar& uninit_var) {
                         // set zero to the default init of global value
                         auto* zero_init = module.make_value<IRZeroInit>(i32_type);
                         auto* global_alloc = module.make_value<IRGlobalAllocInst>(
                             zero_init,
                             i32_ptr_type,
-                            "@" + def_empty.ident);
+                            "@" + uninit_var.ident);
                         module.append_global_value(*global_alloc);
-                        module_symbols_.define_var(def_empty.ident, global_alloc);
+                        module_symbols_.define_var(uninit_var.ident, global_alloc);
                     },
-                    [&](const VarDefAST::DefValue& def_value) {
+                    [&](const VarDefAST::InitializedScalar& init_var) {
                         // eval init value
                         // init value must be constexpr
                         const auto& init_val =
-                            expect_node<InitValAST>(*def_value.init_val, "InitValAST");
-                        const auto& exp = expect_node<ExpAST>(*init_val.exp, "ExpAST");
+                            expect_node<InitValAST>(*init_var.init_val, "InitValAST");
+                        const auto& scalar_init =
+                            std::get<InitValAST::ScalarInit>(init_val.payload);
+                        const auto& exp = expect_node<ExpAST>(*scalar_init.exp, "ExpAST");
                         auto init = get_or_create_constant(eval_exp(exp), module);
 
                         auto* global_alloc = module.make_value<IRGlobalAllocInst>(
                             init,
                             i32_ptr_type,
-                            "@" + def_value.ident);
+                            "@" + init_var.ident);
                         module.append_global_value(*global_alloc);
-                        module_symbols_.define_var(def_value.ident, global_alloc);
+                        module_symbols_.define_var(init_var.ident, global_alloc);
+                    },
+                    [&](const VarDefAST::UninitializedArray& uninit_array) {
+                        // get array size (first dimension for now)
+                        if (uninit_array.const_dims.empty()) {
+                            throw std::runtime_error("array must have at least one dimension: "
+                                                     + uninit_array.ident);
+                        }
+                        const auto& size_exp = expect_node<ExpAST>(*uninit_array.const_dims[0], "ExpAST");
+                        auto length = eval_exp(size_exp);
+                        if (length <= 0) {
+                            throw std::runtime_error("array length must be positive: "
+                                                     + uninit_array.ident);
+                        }
+
+                        // set array type
+                        auto* array_type = get_array_type(i32_type, length);
+
+                        // alloc global array
+                        auto* zero_init = module.make_value<IRZeroInit>(array_type);
+                        auto* global_alloc = module.make_value<IRGlobalAllocInst>(
+                            zero_init,
+                            get_pointer_type(array_type),
+                            "@" + uninit_array.ident);
+                        module.append_global_value(*global_alloc);
+                        module_symbols_.define_var(uninit_array.ident, global_alloc);
+                    },
+                    [&](const VarDefAST::InitializedArray& init_array) {
+                        // get array length (first dimension for now)
+                        if (init_array.const_dims.empty()) {
+                            throw std::runtime_error("array must have at least one dimension: "
+                                                     + init_array.ident);
+                        }
+                        const auto& size_exp = expect_node<ExpAST>(*init_array.const_dims[0], "ExpAST");
+
+                        auto length = eval_exp(size_exp);
+                        if (length <= 0) {
+                            throw std::runtime_error("array length must be positive: "
+                                                     + init_array.ident);
+                        }
+
+                        // get array init
+                        const auto& init_val =
+                            expect_node<InitValAST>(*init_array.init_val, "InitValAST");
+                        if (std::holds_alternative<InitValAST::ScalarInit>(init_val.payload)) {
+                            throw std::runtime_error(init_array.ident + "is array, init must be array");
+                        }
+                        const auto& array_init = std::get<InitValAST::ArrayInit>(init_val.payload);
+
+                        std::vector<IRValue*> elems;
+                        elems.reserve(length);
+                        for (const auto& item : array_init.inits) {
+                            const auto& exp = expect_node<ExpAST>(*item, "ExpAST");
+                            elems.push_back(get_or_create_constant(eval_exp(exp), module));
+                        }
+                        elems.reserve(length);
+
+                        if (elems.size() > static_cast<size_t>(length)) {
+                            throw std::runtime_error("too many initializers for array: "
+                                                     + init_array.ident);
+                        }
+                        elems.resize(length, get_or_create_constant(0, module));
+
+                        // set array type
+                        auto* array_type = get_array_type(i32_type, length);
+
+                        // alloc global array
+                        auto* init = module.make_value<IRAggregate>(std::move(elems), array_type);
+                        auto* global_alloc = module.make_value<IRGlobalAllocInst>(
+                            init,
+                            get_pointer_type(array_type),
+                            "@" + init_array.ident);
+                        module.append_global_value(*global_alloc);
+                        module_symbols_.define_var(init_array.ident, global_alloc);
                     }},
                 def.payload);
         }
@@ -278,8 +441,7 @@ void RewindIRBuilder::lower_gloabl_decl(const DeclAST& ast, IRModule& module)
     throw std::runtime_error("unsupported global decl type");
 }
 
-IRFunction* RewindIRBuilder::lower_func_def(const FuncDefAST& ast,
-                                            IRModule& module)
+IRFunction* RewindIRBuilder::lower_func_def(const FuncDefAST& ast, IRModule& module)
 {
     auto* func = lookup_function(ast.ident);
     if (func == nullptr) {
@@ -305,6 +467,7 @@ IRFunction* RewindIRBuilder::lower_func_def(const FuncDefAST& ast,
         auto& alloc = ctx.create_block_value<IRAllocInst>(
             get_pointer_type(get_i32_type()),
             ctx.next_percent_name());
+        // add to symbol table
         ctx.symbols().define_var(func_f_param.ident, &alloc);
 
         // store arg variable
@@ -322,9 +485,9 @@ IRFunction* RewindIRBuilder::lower_func_def(const FuncDefAST& ast,
      * ensure function have return
      */
     if (ctx.has_current_block()) {
-        if (func->type_->is_unit()) {
+        if (func->type_->return_type->is_unit()) {
             static_cast<void>(ctx.terminate_with_return(nullptr));
-        } else if (func->type_->is_int32()) {
+        } else if (func->type_->return_type->is_int32()) {
             static_cast<void>(ctx.terminate_with_return(
                 get_or_create_constant(0, module)));
         } else {
@@ -385,14 +548,61 @@ void RewindIRBuilder::lower_const_decl(const ConstDeclAST& ast, FuncContext& ctx
 {
     for (const auto& def_base : ast.const_defs) {
         const auto& def = expect_node<ConstDefAST>(*def_base, "ConstDefAST");
-        const auto& init = expect_node<ConstInitValAST>(*def.const_init_val,
-                                                        "ConstInitValAST");
-        const auto& exp = expect_node<ExpAST>(*init.const_exp, "ExpAST");
+        std::visit(
+            overloaded{
+                [&](const ConstDefAST::ConstExpr& const_expr) {
+                    const auto& init =
+                        expect_node<ConstInitValAST>(*const_expr.const_init_val, "ConstInitValAST");
+                    const auto& expr_init =
+                        std::get<ConstInitValAST::ConstExprInit>(init.payload);
+                    const auto& exp = expect_node<ExpAST>(*expr_init.const_exp, "ExpAST");
+                    int32_t value = eval_exp(exp, ctx);
+                    ctx.symbols().define_const(const_expr.ident, value);
+                },
+                [&](const ConstDefAST::ConstArray& const_array) {
+                    // get array length (first dimension for now)
+                    if (const_array.const_dims.empty()) {
+                        throw std::runtime_error("array must have at least one dimension: "
+                                                 + const_array.ident);
+                    }
+                    const auto& size_exp = expect_node<ExpAST>(*const_array.const_dims[0], "ExpAST");
+                    auto length = eval_exp(size_exp, ctx);
+                    if (length <= 0) {
+                        throw std::runtime_error("array length must be positive: "
+                                                 + const_array.ident);
+                    }
 
-        // eval const exp
-        int32_t value = eval_exp(exp, ctx);
+                    auto* array_type = get_array_type(get_i32_type(), length);
+                    auto& alloc = ctx.create_block_value<IRAllocInst>(
+                        get_pointer_type(array_type),
+                        ctx.next_at_name(const_array.ident));
+                    ctx.symbols().define_var(const_array.ident, &alloc, true);
 
-        ctx.symbols().define_const(def.ident, value);
+                    // get array init
+                    const auto& init_val =
+                        expect_node<ConstInitValAST>(*const_array.const_init_val, "ConstInitValAST");
+                    if (std::holds_alternative<ConstInitValAST::ConstExprInit>(init_val.payload)) {
+                        throw std::runtime_error(const_array.ident + "is array, init must be array");
+                    }
+                    const auto& array_init = std::get<ConstInitValAST::ConstArrayInit>(init_val.payload);
+
+                    std::vector<IRValue*> elems;
+                    elems.reserve(length);
+                    for (const auto& item : array_init.const_inits) {
+                        const auto& const_exp = expect_node<ExpAST>(*item, "ExpAST");
+                        elems.push_back(get_or_create_constant(eval_exp(const_exp), ctx.module()));
+                    }
+                    if (elems.size() > static_cast<size_t>(length)) {
+                        throw std::runtime_error("too many initializers for const array: "
+                                                 + const_array.ident);
+                    }
+                    elems.resize(length, get_or_create_constant(0, ctx.module()));
+
+                    auto* init_aggregate = ctx.module().make_value<IRAggregate>(std::move(elems), array_type);
+                    static_cast<void>(ctx.create_block_value<IRStoreInst>(
+                        init_aggregate, &alloc, get_unit_type()));
+                }},
+            def.payload);
     }
 }
 
@@ -405,29 +615,87 @@ void RewindIRBuilder::lower_var_decl(const VarDeclAST& ast, FuncContext& ctx)
         std::visit(
             overloaded{
                 // int x;
-                [&](const VarDefAST::DefEmpty& def) {
+                [&](const VarDefAST::UninitializedScalar& uninit_var) {
                     auto& alloc = ctx.create_block_value<IRAllocInst>(
-                        i32_ptr_type, ctx.next_at_name(def.ident));
-                    ctx.symbols().define_var(def.ident, &alloc);
+                        i32_ptr_type, ctx.next_at_name(uninit_var.ident));
+                    ctx.symbols().define_var(uninit_var.ident, &alloc);
                 },
                 // int x = 10;
-                [&](const VarDefAST::DefValue& def) {
-                    // @ident = alloc i32
+                [&](const VarDefAST::InitializedScalar& init_var) {
+                    // alloc variable
                     auto& alloc = ctx.create_block_value<IRAllocInst>(
-                        i32_ptr_type, ctx.next_at_name(def.ident));
-                    ctx.symbols().define_var(def.ident, &alloc);
+                        i32_ptr_type, ctx.next_at_name(init_var.ident));
+                    ctx.symbols().define_var(init_var.ident, &alloc);
 
-                    // lower exp
-                    // store exp_value, @ident
-                    const auto& init_val = expect_node<InitValAST>(*def.init_val, "InitValAST");
-
-                    const auto& exp = expect_node<ExpAST>(*init_val.exp, "ExpAST");
+                    // get init
+                    const auto& init_val =
+                        expect_node<InitValAST>(*init_var.init_val, "InitValAST");
+                    const auto& scalar_init =
+                        std::get<InitValAST::ScalarInit>(init_val.payload);
+                    const auto& exp = expect_node<ExpAST>(*scalar_init.exp, "ExpAST");
                     auto exp_value = lower_exp(exp, ctx);
 
                     static_cast<void>(ctx.create_block_value<IRStoreInst>(
                         exp_value, &alloc, get_unit_type()));
-                }
+                },
+                [&](const VarDefAST::UninitializedArray& uninit_array) {
+                    // get array size (first dimension for now)
+                    if (uninit_array.const_dims.empty()) {
+                        throw std::runtime_error("array must have at least one dimension: "
+                                                 + uninit_array.ident);
+                    }
+                    const auto& size_exp = expect_node<ExpAST>(*uninit_array.const_dims[0], "ExpAST");
+                    auto length = eval_exp(size_exp, ctx);
+                    if (length <= 0) {
+                        throw std::runtime_error("array length must be positive: "
+                                                 + uninit_array.ident);
+                    }
+                    auto* array_type = get_array_type(get_i32_type(), length);
+                    auto& alloc = ctx.create_block_value<IRAllocInst>(
+                        get_pointer_type(array_type),
+                        ctx.next_at_name(uninit_array.ident));
+                    ctx.symbols().define_var(uninit_array.ident, &alloc);
+                    // ! not store IRAggregate
+                },
+                [&](const VarDefAST::InitializedArray& init_array) {
+                    // get array size (first dimension for now)
+                    if (init_array.const_dims.empty()) {
+                        throw std::runtime_error("array must have at least one dimension: "
+                                                 + init_array.ident);
+                    }
+                    const auto& size_exp = expect_node<ExpAST>(*init_array.const_dims[0], "ExpAST");
+                    auto length = eval_exp(size_exp, ctx);
+                    if (length <= 0) {
+                        throw std::runtime_error("array length must be positive: "
+                                                 + init_array.ident);
+                    }
 
+                    auto* array_type = get_array_type(get_i32_type(), length);
+                    auto& alloc = ctx.create_block_value<IRAllocInst>(
+                        get_pointer_type(array_type),
+                        ctx.next_at_name(init_array.ident));
+
+                    // store local array to symbol table
+                    ctx.symbols().define_var(init_array.ident, &alloc);
+
+                    // local array init
+                    const auto& init_val =
+                        expect_node<InitValAST>(*init_array.init_val, "InitValAST");
+                    const auto& array_init = std::get<InitValAST::ArrayInit>(init_val.payload);
+
+                    std::vector<IRValue*> elems;
+                    elems.reserve(length);
+                    for (const auto& item : array_init.inits) {
+                        const auto& exp = expect_node<ExpAST>(*item, "ExpAST");
+                        elems.push_back(get_or_create_constant(eval_exp(exp), ctx.module()));
+                    }
+
+                    elems.resize(length, get_or_create_constant(0, ctx.module()));
+
+                    auto* init = ctx.module().make_value<IRAggregate>(std::move(elems), array_type);
+                    static_cast<void>(ctx.create_block_value<IRStoreInst>(
+                        init, &alloc, get_unit_type()));
+                },
             },
             def.payload);
     }
@@ -445,12 +713,12 @@ void RewindIRBuilder::lower_stmt(const StmtAST& ast, FuncContext& ctx)
                  * then check if return exp type same as  function return type
                  */
                 if (ret_stmt.exp) {
-                    if (ctx.current_function().type_->is_unit()) {
+                    if (ctx.current_function().type_->return_type->is_unit()) {
                         throw std::runtime_error("void function should not return a value");
                     }
                     const auto& exp = expect_node<ExpAST>(*ret_stmt.exp, "ExpAST");
                     ret_value = lower_exp(exp, ctx);
-                } else if (ctx.current_function().type_->is_int32()) {
+                } else if (ctx.current_function().type_->return_type->is_int32()) {
                     ret_value = get_or_create_constant(0, ctx.module());
                 }
 
@@ -460,19 +728,55 @@ void RewindIRBuilder::lower_stmt(const StmtAST& ast, FuncContext& ctx)
                 // assign
                 // store exp_value, alloc
                 const auto& exp = expect_node<ExpAST>(*assign_stmt.exp, "ExpAST");
-                auto exp_inst = lower_exp(exp, ctx);
+                auto exp_value = lower_exp(exp, ctx);
 
-                auto value = lookup_value(ctx, assign_stmt.LVal);
-                // value not exist or value is const throw error
+                const auto& lval = expect_node<LValAST>(*assign_stmt.lval, "LValAST");
+
+                // check if value can be modified
+                auto value = lookup_value(ctx, lval.ident);
                 if (!value) {
-                    throw std::runtime_error(assign_stmt.LVal + "is not exist");
-                } else if (std::holds_alternative<int32_t>(*value)) {
-                    throw std::runtime_error(assign_stmt.LVal + "is not variable");
+                    throw std::runtime_error(lval.ident + "is not exist");
+                }
+                if (std::holds_alternative<SymbolTable::Constant>(*value)) {
+                    throw std::runtime_error(lval.ident + " is constant");
                 }
 
-                auto alloc = std::get<IRValue*>(*value);
+                const auto& var_info = std::get<SymbolTable::Var>(*value);
+                auto* var = var_info.alloc;
+                if (var_info.is_const) {
+                    throw std::runtime_error(lval.ident + " is const");
+                }
+
+                // array
+                if (is_array_storage(var)) {
+                    if (lval.indices.empty()) {
+                        throw std::runtime_error("array is not assignable without index: " + lval.ident);
+                    }
+                    // get array index and exp value
+                    const auto& index_exp = expect_node<ExpAST>(*lval.indices[0], "ExpAST");
+                    auto* index = lower_exp(index_exp, ctx);
+
+                    auto* ty = get_array_storage_type(var)->element_type;
+                    auto& ptr = ctx.create_block_value<IRGetElemPtrInst>(
+                        var,
+                        index,
+                        get_pointer_type(ty),
+                        ctx.next_percent_name());
+
+                    static_cast<void>(ctx.create_block_value<IRStoreInst>(
+                        exp_value,
+                        &ptr,
+                        get_unit_type()));
+                    return;
+                }
+
+                // local variable
+                if (!lval.indices.empty()) {
+                    throw std::runtime_error(lval.ident + " is not array");
+                }
+
                 static_cast<void>(ctx.create_block_value<IRStoreInst>(
-                    exp_inst, alloc, get_unit_type()));
+                    exp_value, var, get_unit_type()));
             },
             [&](const StmtAST::Block& block_stmt) {
                 const auto& block = expect_node<BlockAST>(*block_stmt.block, "BlockAST");
@@ -632,7 +936,6 @@ IRValue* RewindIRBuilder::lower_exp(const ExpAST& ast, FuncContext& ctx)
     return lower_lor_exp(lor_exp, ctx);
 }
 
-// a || b == !(a || b)
 // Short-circuit evaluation
 /*
  * current basic block
@@ -642,7 +945,7 @@ IRValue* RewindIRBuilder::lower_exp(const ExpAST& ast, FuncContext& ctx)
  * br lhs_bool short_true rhs_bb
  *
  * short_true basic block
- * store 1 tmp
+ * store 1 result
  * jump merge
  *
  * rhs_bb basic block
@@ -699,9 +1002,10 @@ IRValue* RewindIRBuilder::lower_lor_exp(const LOrExpAST& ast, FuncContext& ctx)
 
                 // store 1 result
                 // jump merge
-                auto* one = get_or_create_constant(1, module);
                 static_cast<void>(ctx.create_block_value<IRStoreInst>(
-                    one, &result_slot, get_unit_type()));
+                    get_or_create_constant(1, module),
+                    &result_slot,
+                    get_unit_type()));
                 static_cast<void>(ctx.terminate_with_jump(merge));
 
                 // * rhs_bb basic block
@@ -956,30 +1260,30 @@ IRValue* RewindIRBuilder::lower_unary_exp(const UnaryExpAST& ast,
 
                 // check if params match
                 // from two sides : size and type_
-                if (args.size() != callee->params_.size()) {
+                if (args.size() != callee->type_->params.size()) {
                     throw std::runtime_error(
                         "function argument count mismatch: " + funcCall.ident);
                 }
 
                 for (size_t i = 0; i < args.size(); ++i) {
-                    if (args[i]->type_ != callee->params_[i]->type_) {
+                    if (args[i]->type_ != callee->type_->params[i]) {
                         throw std::runtime_error(
                             "function argument type mismatch: " + funcCall.ident);
                     }
                 }
 
                 // create call inst
-                if (callee->type_->is_unit()) {
+                if (callee->type_->return_type->is_unit()) {
                     return &ctx.create_block_value<IRCallInst>(
                         callee,
                         std::move(args),
-                        callee->type_);
+                        callee->type_->return_type);
                 }
 
                 return &ctx.create_block_value<IRCallInst>(
                     callee,
                     std::move(args),
-                    callee->type_,
+                    callee->type_->return_type,
                     ctx.next_percent_name());
             }},
         ast.payload);
@@ -999,22 +1303,51 @@ IRValue* RewindIRBuilder::lower_primary_exp(const PrimaryExpAST& ast,
                 return lower_exp(exp, ctx);
             },
             [&](const PrimaryExpAST::LValue& lvalue) -> IRValue* {
-                const auto& sym = lookup_value(ctx, lvalue.ident);
+                const auto& lval_ast = expect_node<LValAST>(*lvalue.lval, "LValAST");
+                auto lval = lookup_value(ctx, lval_ast.ident);
 
-                if (sym) {
-                    const auto& value = *sym;
-                    if (std::holds_alternative<int32_t>(value)) {
-                        // const
-                        return get_or_create_constant(std::get<int32_t>(value), module);
-                    } else {
-                        // local variable or global variable
-                        IRValue* alloc = std::get<IRValue*>(value);
-                        return &ctx.create_block_value<IRLoadInst>(
-                            alloc, get_i32_type(), ctx.next_percent_name());
+                // array
+                if (lval && std::holds_alternative<SymbolTable::Var>(*lval)
+                    && is_array_storage(std::get<SymbolTable::Var>(*lval).alloc)) {
+                    if (lval_ast.indices.empty()) {
+                        throw std::runtime_error("array value is not supported without index: " + lval_ast.ident);
                     }
+
+                    const auto& exp = expect_node<ExpAST>(*lval_ast.indices[0], "ExpAST");
+                    auto* index = lower_exp(exp, ctx);
+                    auto* src = std::get<SymbolTable::Var>(*lval).alloc;
+
+                    auto* ty = get_array_storage_type(src);
+                    auto& ptr = ctx.create_block_value<IRGetElemPtrInst>(
+                        src,
+                        index,
+                        get_pointer_type(ty->element_type),
+                        ctx.next_percent_name());
+
+                    return &ctx.create_block_value<IRLoadInst>(
+                        &ptr,
+                        get_i32_type(),
+                        ctx.next_percent_name());
                 }
 
-                throw std::runtime_error("undefined identifier: " + lvalue.ident);
+                if (lval && !lval_ast.indices.empty()) {
+                    throw std::runtime_error(lval_ast.ident + " is not array");
+                }
+
+                // constexpr or local variable
+                if (lval) {
+                    const auto& value = *lval;
+                    if (std::holds_alternative<SymbolTable::Constant>(value)) {
+                        return get_or_create_constant(
+                            std::get<SymbolTable::Constant>(value).value,
+                            module);
+                    }
+                    return &ctx.create_block_value<IRLoadInst>(
+                        std::get<SymbolTable::Var>(value).alloc,
+                        get_i32_type(),
+                        ctx.next_percent_name());
+                }
+                throw std::runtime_error("undefined identifier: " + lval_ast.ident);
             }},
         ast.payload);
 }
@@ -1352,18 +1685,20 @@ int32_t RewindIRBuilder::eval_primary_exp(const PrimaryExpAST& ast,
                 const auto& exp = expect_node<ExpAST>(*e.exp, "ExpAST");
                 return eval_exp(exp, ctx);
             },
-            [&](const PrimaryExpAST::LValue& l) -> int32_t {
-                auto sym = lookup_value(ctx, l.ident);
+            [&](const PrimaryExpAST::LValue& lvalue) -> int32_t {
+                const auto& lval = expect_node<LValAST>(*lvalue.lval, "LValAST");
+                auto sym = lookup_value(ctx, lval.ident);
+
+                // not find
                 if (!sym) {
-                    throw std::runtime_error("undefined const: " + l.ident);
-                } else {
-                    const auto& value = *sym;
-                    if (std::holds_alternative<int32_t>(value)) {
-                        return std::get<int32_t>(value);
-                    } else {
-                        throw std::runtime_error(std::get<IRValue*>(value)->name_ + " is not const");
-                    }
+                    throw std::runtime_error("undefined value: " + lval.ident);
                 }
+                // find variable (array or scalar)
+                if (std::holds_alternative<SymbolTable::Var>(*sym)) {
+                    throw std::runtime_error(lval.ident + " is not constexpr");
+                }
+
+                return std::get<SymbolTable::Constant>(*sym).value;
             }},
         ast.payload);
 }
@@ -1377,18 +1712,19 @@ int32_t RewindIRBuilder::eval_primary_exp(const PrimaryExpAST& ast)
                 const auto& exp = expect_node<ExpAST>(*e.exp, "ExpAST");
                 return eval_exp(exp);
             },
-            [&](const PrimaryExpAST::LValue& l) -> int32_t {
-                auto sym = lookup_value(l.ident);
+            [&](const PrimaryExpAST::LValue& lvalue) -> int32_t {
+                const auto& lval = expect_node<LValAST>(*lvalue.lval, "LValAST");
+                auto sym = lookup_value(lval.ident);
+
                 if (!sym) {
-                    throw std::runtime_error("undefined const: " + l.ident);
+                    throw std::runtime_error("undefined variable: " + lval.ident);
                 }
-                const auto& value = *sym;
-                if (std::holds_alternative<int32_t>(value)) {
-                    return std::get<int32_t>(value);
-                } else {
-                    throw std::runtime_error(
-                        std::get<IRValue*>(value)->name_ + " is not const");
+
+                if (std::holds_alternative<SymbolTable::Var>(*sym)) {
+                    throw std::runtime_error(lval.ident + " is not constexpr");
                 }
+
+                return std::get<SymbolTable::Constant>(*sym).value;
             }},
         ast.payload);
 }
@@ -1404,7 +1740,8 @@ IRValue* RewindIRBuilder::get_or_create_constant(int32_t value, IRModule& module
     return c;
 }
 
-std::optional<std::variant<int32_t, IRValue*>>
+// first local lookup, then global lookup
+std::optional<SymbolTable::LookupResult>
 RewindIRBuilder::lookup_value(const FuncContext& ctx, const std::string& name) const
 {
     if (auto local = ctx.symbols().lookup_value(name)) {
@@ -1413,7 +1750,8 @@ RewindIRBuilder::lookup_value(const FuncContext& ctx, const std::string& name) c
     return module_symbols_.lookup_value(name);
 }
 
-std::optional<std::variant<int32_t, IRValue*>>
+// global lookup
+std::optional<SymbolTable::LookupResult>
 RewindIRBuilder::lookup_value(const std::string& name) const
 {
     return module_symbols_.lookup_value(name);

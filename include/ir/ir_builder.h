@@ -71,10 +71,10 @@ private:
     // if constant exists, will Reuse previous constant
     IRValue* get_or_create_constant(int32_t value, IRModule& module);
 
-    std::optional<std::variant<int32_t, IRValue*>>
+    std::optional<SymbolTable::LookupResult>
     lookup_value(const FuncContext& ctx, const std::string& name) const;
 
-    std::optional<std::variant<int32_t, IRValue*>>
+    std::optional<SymbolTable::LookupResult>
     lookup_value(const std::string& name) const;
 
     IRFunction* lookup_function(const std::string& name) const;

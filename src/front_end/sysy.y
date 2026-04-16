@@ -38,8 +38,9 @@ using namespace std;
 // 非终结符的类型定义
 %type <ast_val> CompUnitItem FuncDef Block Stmt Exp PrimaryExp UnaryExp AddExp MulExp LOrExp RelExp EqExp LAndExp
 %type <ast_val> Decl ConstDecl ConstDef ConstInitVal BlockItem ConstExp VarDecl VarDef InitVal
-%type <ast_val> MatchedStmt UnMatchedStmt FuncFParam FuncRParams
+%type <ast_val> MatchedStmt UnMatchedStmt FuncFParam FuncRParams LVal DimDecl Index
 %type <ast_list> ConstDefList BlockItemList VarDefList CompUnitItemList FuncFParamList ExpList
+%type <ast_list> DimDeclList ConstInitValList InitValList OptIndexList
 %type <int_val> Number
 %type <unary_op> UnaryOp
 %type <binary_op> AddOp MulOp RelOp EqOp
@@ -168,11 +169,24 @@ ConstDefList
     }
     ;
 
-ConstDef    
+ConstDef
     : IDENT '=' ConstInitVal {
         auto ast = new ConstDefAST();
-        ast->ident = *unique_ptr<string>($1);
-        ast->const_init_val = unique_ptr<BaseAST>($3);
+        ast->payload = ConstDefAST::ConstExpr {
+            *unique_ptr<string>($1),
+            unique_ptr<BaseAST>($3)
+        };
+        $$ = ast;
+    }
+    | IDENT DimDeclList '=' ConstInitVal {
+        auto ast = new ConstDefAST();
+        auto* dim_list = $2;
+        ast->payload = ConstDefAST::ConstArray {
+            *unique_ptr<string>($1),
+            std::move(*dim_list),
+            unique_ptr<BaseAST>($4)
+        };
+        delete dim_list;
         $$ = ast;
     }
     ;
@@ -180,14 +194,64 @@ ConstDef
 ConstInitVal
     : ConstExp {
         auto ast = new ConstInitValAST();
-        ast->const_exp = unique_ptr<BaseAST>($1);
+        ast->payload = ConstInitValAST::ConstExprInit {
+            unique_ptr<BaseAST>($1)
+        };
         $$ = ast;
+    }
+    | '{' '}' {
+        auto ast = new ConstInitValAST();
+        ast->payload = ConstInitValAST::ConstArrayInit { {} };
+        $$ = ast;
+    }
+    | '{' ConstInitValList '}' {
+        auto ast = new ConstInitValAST();
+        if ($2 != nullptr) {
+            ast->payload = ConstInitValAST::ConstArrayInit {
+                std::move(*($2))
+            };
+            delete $2;
+        }
+        $$ = ast;
+    }
+    ;
+
+ConstInitValList
+    : ConstInitVal {
+        auto init_list = new vector<unique_ptr<BaseAST>>();
+        init_list->push_back(unique_ptr<BaseAST>($1));
+        $$ = init_list;
+    }
+    | ConstInitValList ',' ConstInitVal {
+        auto init_list = $1;
+        init_list->push_back(unique_ptr<BaseAST>($3));
+        $$ = init_list;
     }
     ;
 
 ConstExp
     : Exp {
         $$ = $1;
+    }
+    ;
+
+// Multi-dimensional array dimension declaration
+DimDeclList
+    : DimDecl {
+        auto dim_list = new vector<unique_ptr<BaseAST>>();
+        dim_list->push_back(unique_ptr<BaseAST>($1));
+        $$ = dim_list;
+    }
+    | DimDeclList DimDecl {
+        auto dim_list = $1;
+        dim_list->push_back(unique_ptr<BaseAST>($2));
+        $$ = dim_list;
+    }
+    ;
+
+DimDecl
+    : '[' ConstExp ']' {
+        $$ = $2;
     }
     ;
 
@@ -217,24 +281,77 @@ VarDefList
 VarDef
     : IDENT {
         auto ast = new VarDefAST();
-        ast->payload = VarDefAST::DefEmpty{ *unique_ptr<string>{$1} };
+        ast->payload = VarDefAST::UninitializedScalar{
+            *unique_ptr<string>{$1}
+        };
         $$ = ast;
     }
     | IDENT '=' InitVal {
         auto ast = new VarDefAST();
-        ast->payload = VarDefAST::DefValue{
+        ast->payload = VarDefAST::InitializedScalar{
             *unique_ptr<string>($1),
             unique_ptr<BaseAST>($3)
         };
         $$ = ast;
     }
+    | IDENT DimDeclList {
+        auto ast = new VarDefAST();
+        auto* dim_list = $2;
+        ast->payload = VarDefAST::UninitializedArray {
+            *unique_ptr<string>($1),
+            std::move(*dim_list)
+        };
+        delete dim_list;
+        $$ = ast;
+    }
+    | IDENT DimDeclList '=' InitVal {
+        auto ast = new VarDefAST();
+        auto* dim_list = $2;
+        ast->payload = VarDefAST::InitializedArray {
+            *unique_ptr<string>($1),
+            std::move(*dim_list),
+            unique_ptr<BaseAST>($4)
+        };
+        delete dim_list;
+        $$ = ast;
+    }
     ;
 
-InitVal 
+InitVal
     : Exp {
         auto ast = new InitValAST();
-        ast->exp = unique_ptr<BaseAST>($1);
+        ast->payload = InitValAST::ScalarInit {
+            unique_ptr<BaseAST>($1)
+        };
         $$ = ast;
+    }
+    | '{' '}' {
+        auto ast = new InitValAST();
+        ast->payload = InitValAST::ArrayInit { {} };
+        $$ = ast;
+    }
+    | '{' InitValList '}' {
+        auto ast = new InitValAST();
+        if ($2 != nullptr) {
+            ast->payload = InitValAST::ArrayInit {
+                std::move(*($2))
+            };
+            delete $2;
+        }
+        $$ = ast;
+    }
+    ;
+
+InitValList
+    : InitVal {
+        auto init_list = new vector<unique_ptr<BaseAST>>();
+        init_list->push_back(unique_ptr<BaseAST>($1));
+        $$ = init_list;
+    }
+    | InitValList ',' InitVal {
+        auto init_list = $1;
+        init_list->push_back(unique_ptr<BaseAST>($3));
+        $$ = init_list;
     }
     ;
 
@@ -290,11 +407,11 @@ MatchedStmt
         ast->payload = StmtAST::Return { nullptr };
         $$ = ast;
     }
-    | IDENT '=' Exp ';'
+    | LVal '=' Exp ';'
     {
         auto ast = new StmtAST();
         ast->payload = StmtAST::Assign {
-            *unique_ptr<string>($1),
+            unique_ptr<BaseAST>($1),
             unique_ptr<BaseAST>($3) 
         };
         $$ = ast;
@@ -528,24 +645,6 @@ AddOp
     }
     ;
 
-PrimaryExp
-    : '(' Exp ')' {
-        auto ast = new PrimaryExpAST();
-        ast->payload = PrimaryExpAST::Expression { unique_ptr<BaseAST>($2) };
-        $$ = ast;
-    }
-    | Number {
-        auto ast = new PrimaryExpAST();
-        ast->payload = PrimaryExpAST::Number { $1 };
-        $$ = ast;
-    }
-    | IDENT {
-        auto ast = new PrimaryExpAST();
-        ast->payload = PrimaryExpAST::LValue { *unique_ptr<string>($1) };
-        $$ = ast;
-    }
-    ;
-
 // unary operation 一元表达式
 UnaryExp
     : PrimaryExp {
@@ -603,6 +702,56 @@ UnaryOp
     | BANG {
         $$ = UnaryOp::NOT;
     } 
+    ;
+
+PrimaryExp
+    : '(' Exp ')' {
+        auto ast = new PrimaryExpAST();
+        ast->payload = PrimaryExpAST::Expression { 
+            unique_ptr<BaseAST>($2) 
+        };
+        $$ = ast;
+    }
+    | Number {
+        auto ast = new PrimaryExpAST();
+        ast->payload = PrimaryExpAST::Number { $1 };
+        $$ = ast;
+    }
+    | LVal {
+        auto ast = new PrimaryExpAST();
+        ast->payload = PrimaryExpAST::LValue { 
+            unique_ptr<BaseAST>($1)
+        };
+        $$ = ast;
+    }
+    ;
+
+LVal
+    : IDENT OptIndexList {
+        auto ast = new LValAST();
+        ast->ident = *unique_ptr<string>($1);
+        auto* index_list = $2;
+        ast->indices = std::move(*index_list);
+        delete index_list;
+        $$ = ast;
+    }
+    ;
+
+OptIndexList
+    : %empty {
+        $$ = new vector<unique_ptr<BaseAST>>();
+    }
+    | OptIndexList Index {
+        auto index_list = $1;
+        index_list->push_back(unique_ptr<BaseAST>($2));
+        $$ = index_list;
+    }
+    ;
+
+Index
+    : '[' Exp ']' {
+        $$ = $2;
+    }
     ;
 
 Number
