@@ -85,6 +85,9 @@ public:
     const IRType* element_type;
     const size_t length;
 
+    size_t getArrayDim() const;
+    const IRType* getArrayBaseType() const;
+
     IRArrayType(const IRType* elem, size_t len) :
         IRType(IRTypeTag::ARRAY),
         element_type(elem),

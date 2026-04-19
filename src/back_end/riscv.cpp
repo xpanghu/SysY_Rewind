@@ -13,67 +13,53 @@ namespace riscv
 namespace
 {
 
-constexpr int32_t kWordSize = 4;
+constexpr int32_t WORDSIZE = 4;
 constexpr int32_t align = 16;
-constexpr size_t kArgRegisterCount = 8;
-
-const int32_t* find_slot(const std::unordered_map<const rewind_ir::IRValue*, int32_t>& slots,
-                         const rewind_ir::IRValue* value)
-{
-    const auto it = slots.find(value);
-    if (it == slots.end()) {
-        return nullptr;
-    }
-    return &it->second;
-}
-
-// return the base type of pointer
-const rewind_ir::IRType* storage_base_type(const rewind_ir::IRValue* value)
-{
-    if (value == nullptr || value->type_ == nullptr || !value->type_->is_pointer()) {
-        return nullptr;
-    }
-    return value->type_->as<rewind_ir::IRPointerType>()->base_type;
-}
+constexpr size_t ArgRegisterCount = 8;
 
 // return array type
-const rewind_ir::IRArrayType* storage_array_type(const rewind_ir::IRValue* value)
+inline const rewind_ir::IRArrayType* get_array_storage_type(const rewind_ir::IRValue* value)
 {
-    const auto* base_type = storage_base_type(value);
-    if (base_type == nullptr || !base_type->is_array()) {
+    if (!value->type_->is_pointer()) {
         return nullptr;
     }
-    return base_type->as<rewind_ir::IRArrayType>();
+
+    const auto* pointer_base_type = value->type_->as<rewind_ir::IRPointerType>()->base_type;
+    if (!pointer_base_type->is_array()) {
+        return nullptr;
+    }
+
+    return pointer_base_type->as<rewind_ir::IRArrayType>();
 }
+
+// const rewind_ir::IRType* get_array_storage_type(const IRValue* storage)
 
 } // namespace
 
-// todo : directly cal type size
-// ? further adjustments are needed
-bool FunctionFrame::produces_stack_value(const rewind_ir::IRValue& value)
+int32_t FunctionFrame::stack_storage_size(const rewind_ir::IRValue& value)
 {
     switch (value.kind_) {
-    case rewind_ir::IRValueKind::IR_BINARY:
-    case rewind_ir::IRValueKind::IR_LOAD:
-    case rewind_ir::IRValueKind::IR_GET_PTR:
-    case rewind_ir::IRValueKind::IR_GET_ELEM_PTR:
-        return true;
-    case rewind_ir::IRValueKind::IR_CALL:
-        return value.type_ != nullptr && !value.type_->is_unit();
-    default:
-        return false;
+    case rewind_ir::IRValueKind::IR_ALLOC: {
+        const auto* pointer_type = value.type_->as<rewind_ir::IRPointerType>();
+        auto size = rewind_ir::IRTypeContext::instance().getTypeSize(pointer_type->base_type);
+        return static_cast<int32_t>(size);
     }
-}
-
-int32_t FunctionFrame::alloc_size(const rewind_ir::IRAllocInst& inst)
-{
-    if (inst.type_ == nullptr || !inst.type_->is_pointer()) {
-        return kWordSize;
+        // case rewind_ir::IRValueKind::IR_BINARY:
+        // case rewind_ir::IRValueKind::IR_LOAD:
+        // case rewind_ir::IRValueKind::IR_GET_PTR:
+        // case rewind_ir::IRValueKind::IR_GET_ELEM_PTR:
+        // case rewind_ir::IRValueKind::IR_CALL: {
+        // auto size = rewind_ir::IRTypeContext::instance().getTypeSize(value.type_);
+        // return static_cast<int32_t>(size);
+    //}
+    default: {
+        if (value.type_ == nullptr) {
+            return static_cast<int32_t>(0);
+        }
+        auto size = rewind_ir::IRTypeContext::instance().getTypeSize(value.type_);
+        return static_cast<int32_t>(size);
     }
-
-    const auto* pointer_type = inst.type_->as<rewind_ir::IRPointerType>();
-    auto size = rewind_ir::IRTypeContext::instance().getTypeSize(pointer_type->base_type);
-    return static_cast<int32_t>(size == 0 ? kWordSize : size);
+    }
 }
 
 // align must be power of 2
@@ -121,44 +107,37 @@ void FunctionFrame::build(const rewind_ir::IRFunction& func)
                 max_func_param_size = std::max(max_func_param_size, call_inst->args_.size());
             }
 
-            if (inst->kind_ == rewind_ir::IRValueKind::IR_ALLOC) {
-                const auto* alloc = inst->as<rewind_ir::IRAllocInst>();
-                payload_size += alloc_size(*alloc);
-                continue;
-            }
-
-            if (produces_stack_value(*inst)) {
-                payload_size += kWordSize;
-            }
+            payload_size += stack_storage_size(*inst);
         }
     }
 
-    const auto saved_ra_size = has_saved_ra_ ? kWordSize : 0;
+    const auto saved_ra_size = has_saved_ra_ ? WORDSIZE : 0;
 
-    if (max_func_param_size > kArgRegisterCount) {
+    if (max_func_param_size > ArgRegisterCount) {
         outgoing_arg_size_ =
-            static_cast<int32_t>((max_func_param_size - kArgRegisterCount) * kWordSize);
+            static_cast<int32_t>((max_func_param_size - ArgRegisterCount) * WORDSIZE);
     }
 
     frame_size_ = align_to(outgoing_arg_size_ + payload_size + saved_ra_size, align);
     if (has_saved_ra_) {
-        ra_offset_ = frame_size_ - kWordSize;
+        ra_offset_ = frame_size_ - WORDSIZE;
     }
 
     next_slot_offset_ = outgoing_arg_size_;
     // second traversal to ensure the location distribution of local variable and inst result
     for (const auto* block : func.basic_blocks_) {
         for (const auto* inst : block->insts_) {
+            const auto storage_size = stack_storage_size(*inst);
+
             if (inst->kind_ == rewind_ir::IRValueKind::IR_ALLOC) {
-                const auto* alloc = inst->as<rewind_ir::IRAllocInst>();
                 object_slots_.emplace(inst, next_slot_offset_);
-                next_slot_offset_ += alloc_size(*alloc);
+                next_slot_offset_ += storage_size;
                 continue;
             }
 
-            if (produces_stack_value(*inst)) {
+            if (storage_size > 0) {
                 value_slots_.emplace(inst, next_slot_offset_);
-                next_slot_offset_ += kWordSize;
+                next_slot_offset_ += storage_size;
             }
         }
     }
@@ -167,20 +146,31 @@ void FunctionFrame::build(const rewind_ir::IRFunction& func)
 // return the stack frame address of the outgoing arg
 int32_t FunctionFrame::outgoing_arg_offset(size_t arg_index) const
 {
-    if (arg_index < kArgRegisterCount) {
+    if (arg_index < ArgRegisterCount) {
         throw std::runtime_error("outgoing_arg_offset requires stack-passed argument");
     }
-    const auto stack_index = arg_index - kArgRegisterCount;
-    return static_cast<int32_t>(stack_index * kWordSize);
+    const auto stack_index = arg_index - ArgRegisterCount;
+    return static_cast<int32_t>(stack_index * WORDSIZE);
 }
 
 // return the stack frame address of the call function actual arg
 int32_t FunctionFrame::incoming_stack_arg_offset(size_t arg_index) const
 {
-    if (arg_index < kArgRegisterCount) {
+    if (arg_index < ArgRegisterCount) {
         throw std::runtime_error("incoming_stack_arg_offset requires stack-passed argument");
     }
     return frame_size_ + outgoing_arg_offset(arg_index);
+}
+
+const int32_t* FunctionFrame::find_slot(
+    const std::unordered_map<const rewind_ir::IRValue*, int32_t>& slots,
+    const rewind_ir::IRValue* value)
+{
+    const auto it = slots.find(value);
+    if (it == slots.end()) {
+        return nullptr;
+    }
+    return &it->second;
 }
 
 bool FunctionFrame::has_object_slot(const rewind_ir::IRValue* value) const
@@ -346,6 +336,7 @@ void IREmitter::emit_global_value(const rewind_ir::IRGlobalAllocInst& global_all
     switch (global_alloc.init_->kind_) {
     case rewind_ir::IRValueKind::IR_ZERO_INIT: {
         auto* init = global_alloc.init_->as<rewind_ir::IRZeroInit>();
+
         if (init->type_->is_int32()) {
             out_ << "  .zero 4" << "\n";
         } else if (init->type_->is_array()) {
@@ -355,8 +346,6 @@ void IREmitter::emit_global_value(const rewind_ir::IRGlobalAllocInst& global_all
                     out_ << "  .zero 4" << "\n";
                 }
             }
-        } else {
-            throw std::runtime_error("unsupported global init type");
         }
         break;
     }
@@ -371,8 +360,6 @@ void IREmitter::emit_global_value(const rewind_ir::IRGlobalAllocInst& global_all
             if (item->is_integer()) {
                 const auto* constant = item->as<rewind_ir::IRConstant>();
                 out_ << "  .word " << constant->value_ << "\n";
-            } else {
-                throw std::runtime_error("global array elem is not constant");
             }
         }
         break;
@@ -466,7 +453,7 @@ void IREmitter::emit_instruction(const rewind_ir::IRValue& inst)
  */
 void IREmitter::emit_get_elem_ptr(const rewind_ir::IRGetElemPtrInst& inst)
 {
-    const auto* array_type = storage_array_type(inst.src_);
+    const auto* array_type = get_array_storage_type(inst.src_);
     if (array_type == nullptr) {
         throw std::runtime_error("getelemptr source is not array storage");
     }
@@ -487,7 +474,7 @@ void IREmitter::emit_get_elem_ptr(const rewind_ir::IRGetElemPtrInst& inst)
 
 void IREmitter::emit_call(const rewind_ir::IRCallInst& inst)
 {
-    const auto register_arg_count = std::min(inst.args_.size(), kArgRegisterCount);
+    const auto register_arg_count = std::min(inst.args_.size(), ArgRegisterCount);
 
     // assign registers for args
     for (size_t i = 0; i < register_arg_count; ++i) {
@@ -495,7 +482,7 @@ void IREmitter::emit_call(const rewind_ir::IRCallInst& inst)
     }
 
     // assign additional arg to the stack frame
-    for (size_t i = kArgRegisterCount; i < inst.args_.size(); ++i) {
+    for (size_t i = ArgRegisterCount; i < inst.args_.size(); ++i) {
         materialize_value(inst.args_[i], Register::t0);
         emit_stack_store(Register::t0, frame_.outgoing_arg_offset(i));
     }
@@ -544,7 +531,7 @@ void IREmitter::emit_store(const rewind_ir::IRStoreInst& inst)
 {
     // store local array
     if (inst.value_->is_aggregate()) {
-        const auto* array_type = storage_array_type(inst.dest_);
+        const auto* array_type = get_array_storage_type(inst.dest_);
         if (array_type == nullptr) {
             throw std::runtime_error("aggregate store destination is not array storage");
         }
@@ -552,12 +539,12 @@ void IREmitter::emit_store(const rewind_ir::IRStoreInst& inst)
         const auto* aggregate = inst.value_->as<rewind_ir::IRAggregate>();
         materialize_pointer(inst.dest_, Register::t2);
         // array elem type size
-        const auto elem_size = static_cast<int32_t>(
-            rewind_ir::IRTypeContext::instance().getTypeSize(array_type->element_type));
+        const auto array_elem_size = static_cast<int32_t>(
+            rewind_ir::IRTypeContext::instance().getTypeSize(array_type->getArrayBaseType()));
 
         for (size_t i = 0; i < aggregate->elems_.size(); ++i) {
             materialize_value(aggregate->elems_[i], Register::t0);
-            const auto offset = static_cast<int32_t>(i) * elem_size;
+            const auto offset = static_cast<int32_t>(i) * array_elem_size;
             if (fits_i12(offset)) {
                 emit_sw(Register::t0, Register::t2, offset);
             } else {
@@ -569,7 +556,7 @@ void IREmitter::emit_store(const rewind_ir::IRStoreInst& inst)
         return;
     }
 
-    // store local variable
+    // store local scalar
     materialize_value(inst.value_, Register::t0);
     store_to_addressable(inst.dest_, Register::t0);
 }
@@ -678,7 +665,7 @@ void IREmitter::materialize_value(const rewind_ir::IRValue* value, Register dst)
     // func arg
     if (value->kind_ == rewind_ir::IRValueKind::FUNC_ARG_REF) {
         const auto* arg = value->as<rewind_ir::IRFuncArgRef>();
-        if (arg->index_ < kArgRegisterCount) {
+        if (arg->index_ < ArgRegisterCount) {
             emit_mv(dst, arg_reg(arg->index_));
         } else {
             emit_stack_load(dst, frame_.incoming_stack_arg_offset(arg->index_));

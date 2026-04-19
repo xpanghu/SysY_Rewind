@@ -1,4 +1,5 @@
 #include "ir_type.h"
+#include <cstddef>
 #include <functional>
 #include <stdexcept>
 
@@ -92,6 +93,26 @@ const IRFunctionType* IRTypeContext::getFunction(std::vector<const IRType*> para
     auto* ptr = type.get();
     function_types_[hash] = std::move(type);
     return ptr;
+}
+
+size_t IRArrayType::getArrayDim() const
+{
+    const IRType* array_type = this;
+    size_t dim = 0;
+    while (array_type->is_array()) {
+        array_type = array_type->as<IRArrayType>()->element_type;
+        dim++;
+    }
+    return dim;
+}
+
+const IRType* IRArrayType::getArrayBaseType() const
+{
+    const IRType* base_type = this->element_type;
+    while (base_type->is_array()) {
+        base_type = base_type->as<IRArrayType>()->element_type;
+    }
+    return base_type;
 }
 
 // ! too many magic number

@@ -308,8 +308,8 @@ private:
 // Store :: = "store"(Value | Initializer) "," SYMBOL;
 // SYMBOL type must be pointer type, set to *t
 // then (Value | Initializer) type is t
-// store inst type is unit
-// store inst name is empty
+// type unit
+// name empty
 class IRStoreInst : public IRInstruction
 {
     friend class IRModule;
@@ -349,6 +349,7 @@ private:
 // SYMBOL is a pointer ptr, type *t
 // Value is offset
 // return ptr + sizeof(t) * Value
+// return type *t
 class IRGetPtrInst : public IRInstruction
 {
     friend class IRModule;
@@ -373,6 +374,7 @@ private:
 // SYMBOL is pointer of array ptr, type *[t, len]
 // Value is offset
 // return ptr + sizeof(t) * Value
+// return type *t
 class IRGetElemPtrInst : public IRInstruction
 {
     friend class IRModule;
@@ -552,7 +554,7 @@ private:
     }
 };
 
-// ========== IRModule ==========
+// IRModule
 // * const value store in RewindIRBuilder constant_cache_
 class IRModule
 {

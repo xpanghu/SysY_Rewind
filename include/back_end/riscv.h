@@ -65,8 +65,10 @@ public:
     int32_t incoming_stack_arg_offset(size_t arg_index) const;
 
 private:
-    static bool produces_stack_value(const rewind_ir::IRValue& value); // check if inst have result value
-    static int32_t alloc_size(const rewind_ir::IRAllocInst& inst);
+    static const int32_t* find_slot(
+        const std::unordered_map<const rewind_ir::IRValue*, int32_t>& slots,
+        const rewind_ir::IRValue* value);
+    static int32_t stack_storage_size(const rewind_ir::IRValue& value);
     static int32_t align_to(int32_t value, int32_t align);
 
     int32_t next_slot_offset_ = 0;
@@ -75,7 +77,7 @@ private:
     int32_t outgoing_arg_size_ = 0;
     bool has_saved_ra_ = false;
 
-    std::unordered_map<const rewind_ir::IRValue*, int32_t> object_slots_; // represent the stack offest of the variable
+    std::unordered_map<const rewind_ir::IRValue*, int32_t> object_slots_; // represent the stack offest of the variable (scalar and array)
     std::unordered_map<const rewind_ir::IRValue*, int32_t> value_slots_;  // represent the stack offest of the intst result
 };
 

@@ -40,7 +40,7 @@ using namespace std;
 %type <ast_val> Decl ConstDecl ConstDef ConstInitVal BlockItem ConstExp VarDecl VarDef InitVal
 %type <ast_val> MatchedStmt UnMatchedStmt FuncFParam FuncRParams LVal DimDecl Index
 %type <ast_list> ConstDefList BlockItemList VarDefList CompUnitItemList FuncFParamList ExpList
-%type <ast_list> DimDeclList ConstInitValList InitValList OptIndexList
+%type <ast_list> DimDeclList ConstInitValList OptIndexList
 %type <int_val> Number
 %type <unary_op> UnaryOp
 %type <binary_op> AddOp MulOp RelOp EqOp
@@ -82,9 +82,7 @@ CompUnitItem
 FuncDef
     : INT IDENT '(' FuncFParamList ')' Block {
         auto ast = new FuncDefAST();
-        auto func_type = make_unique<FuncTypeAST>();
-        func_type->type = "int";
-        ast->func_type = std::move(func_type);
+        ast->func_type = FuncType::INT;
         ast->ident = *unique_ptr<string>($2);
         ast->block = unique_ptr<BaseAST>($6);
         if ($4 != nullptr) {
@@ -95,9 +93,7 @@ FuncDef
     }
     | VOID IDENT '(' FuncFParamList ')' Block {
         auto ast = new FuncDefAST();
-        auto func_type = make_unique<FuncTypeAST>();
-        func_type->type = "void";
-        ast->func_type = std::move(func_type);
+        ast->func_type = FuncType::VOID;
         ast->ident = *unique_ptr<string>($2);
         ast->block = unique_ptr<BaseAST>($6);
         if ($4 != nullptr) {
@@ -129,6 +125,24 @@ FuncFParam
         auto func_f_param = new FuncFParamAST();
         func_f_param->type = BType::INT;
         func_f_param->ident = *unique_ptr<string>($2);
+        func_f_param->payload = FuncFParamAST::Scalar{};
+        $$ = func_f_param;
+    }
+    | INT IDENT '[' ']' {
+        auto func_f_param = new FuncFParamAST();
+        func_f_param->type = BType::INT;
+        func_f_param->ident = *unique_ptr<string>($2);
+        func_f_param->payload = FuncFParamAST::Array{ {} };
+        $$ = func_f_param;
+    }
+    | INT IDENT '[' ']' DimDeclList{
+        auto func_f_param = new FuncFParamAST();
+        func_f_param->type = BType::INT;
+        func_f_param->ident = *unique_ptr<string>($2);
+        func_f_param->payload = FuncFParamAST::Array {
+            std::move(*($5))
+        };
+        delete $5;
         $$ = func_f_param;
     }
     ;
@@ -180,13 +194,12 @@ ConstDef
     }
     | IDENT DimDeclList '=' ConstInitVal {
         auto ast = new ConstDefAST();
-        auto* dim_list = $2;
         ast->payload = ConstDefAST::ConstArray {
             *unique_ptr<string>($1),
-            std::move(*dim_list),
+            std::move(*($2)),
             unique_ptr<BaseAST>($4)
         };
-        delete dim_list;
+        delete $2;
         $$ = ast;
     }
     ;
@@ -304,7 +317,7 @@ VarDef
         delete dim_list;
         $$ = ast;
     }
-    | IDENT DimDeclList '=' InitVal {
+    | IDENT DimDeclList '=' ConstInitVal {
         auto ast = new VarDefAST();
         auto* dim_list = $2;
         ast->payload = VarDefAST::InitializedArray {
@@ -319,41 +332,11 @@ VarDef
 
 InitVal
     : Exp {
-        auto ast = new InitValAST();
-        ast->payload = InitValAST::ScalarInit {
-            unique_ptr<BaseAST>($1)
-        };
-        $$ = ast;
-    }
-    | '{' '}' {
-        auto ast = new InitValAST();
-        ast->payload = InitValAST::ArrayInit { {} };
-        $$ = ast;
-    }
-    | '{' InitValList '}' {
-        auto ast = new InitValAST();
-        if ($2 != nullptr) {
-            ast->payload = InitValAST::ArrayInit {
-                std::move(*($2))
-            };
-            delete $2;
-        }
-        $$ = ast;
+        $$ = $1;
     }
     ;
 
-InitValList
-    : InitVal {
-        auto init_list = new vector<unique_ptr<BaseAST>>();
-        init_list->push_back(unique_ptr<BaseAST>($1));
-        $$ = init_list;
-    }
-    | InitValList ',' InitVal {
-        auto init_list = $1;
-        init_list->push_back(unique_ptr<BaseAST>($3));
-        $$ = init_list;
-    }
-    ;
+
 
 Block
     : '{' BlockItemList '}' {

@@ -98,12 +98,6 @@ public:
         bool active_ = true;
     };
 
-    FuncContext(IRModule& module, IRFunction& function) :
-        module_(module),
-        current_function_(&function)
-    {
-    }
-
     IRModule& module() const
     {
         return module_;
@@ -239,6 +233,12 @@ public:
             IRTypeContext::instance().getUnit());
         clear_current_block();
         return inst;
+    }
+
+    FuncContext(IRModule& module, IRFunction& function) :
+        module_(module),
+        current_function_(&function)
+    {
     }
 
 private:

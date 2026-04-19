@@ -34,6 +34,11 @@ enum class BType {
     INT
 };
 
+enum class FuncType {
+    INT,
+    VOID
+};
+
 namespace ast_dump_detail
 {
 
@@ -95,19 +100,10 @@ public:
 class FuncDefAST : public BaseAST
 {
 public:
-    std::unique_ptr<BaseAST> func_type;
+    FuncType func_type;
     std::string ident;
     std::unique_ptr<BaseAST> block;
     std::vector<std::unique_ptr<BaseAST>> func_f_params;
-
-    void Dump(std::ostream& out, int indent = 0) const override;
-};
-
-// FuncTypeAST
-class FuncTypeAST : public BaseAST
-{
-public:
-    std::string type;
 
     void Dump(std::ostream& out, int indent = 0) const override;
 };
@@ -118,6 +114,17 @@ class FuncFParamAST : public BaseAST
 public:
     BType type = BType::INT;
     std::string ident;
+
+    struct Scalar {
+    };
+
+    struct Array {
+        std::vector<std::unique_ptr<BaseAST>> array_dim_size;
+    };
+
+    using Payload = std::variant<Scalar, Array>;
+    Payload payload;
+
     void Dump(std::ostream& out, int ident = 0) const override;
 };
 
@@ -217,7 +224,7 @@ public:
 
     struct InitializedScalar {
         std::string ident;
-        std::unique_ptr<BaseAST> init_val;
+        std::unique_ptr<BaseAST> init_val; // exp
     };
 
     struct UninitializedArray {
@@ -228,28 +235,10 @@ public:
     struct InitializedArray {
         std::string ident;
         std::vector<std::unique_ptr<BaseAST>> const_dims; // multiple [ConstExp] for multi-dimensional array
-        std::unique_ptr<BaseAST> init_val;
+        std::unique_ptr<BaseAST> init_val;                // ConstInitValAST
     };
 
     using Payload = std::variant<UninitializedScalar, InitializedScalar, UninitializedArray, InitializedArray>;
-    Payload payload;
-
-    void Dump(std::ostream& out, int ident = 0) const override;
-};
-
-// InitVal
-class InitValAST : public BaseAST
-{
-public:
-    struct ScalarInit {
-        std::unique_ptr<BaseAST> exp;
-    };
-
-    struct ArrayInit {
-        std::vector<std::unique_ptr<BaseAST>> inits; // vector of InitValAST
-    };
-
-    using Payload = std::variant<ScalarInit, ArrayInit>;
     Payload payload;
 
     void Dump(std::ostream& out, int ident = 0) const override;

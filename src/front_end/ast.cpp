@@ -74,6 +74,16 @@ std::string_view btype_to_cstr(BType type)
     }
 }
 
+std::string_view func_type_to_cstr(FuncType type)
+{
+    switch (type) {
+    case FuncType::INT:
+        return "int";
+    case FuncType::VOID:
+        return "void";
+    }
+}
+
 } // namespace ast_dump_detail
 
 void CompUnitAST::Dump(std::ostream& out, int indent) const
@@ -89,11 +99,11 @@ void CompUnitAST::Dump(std::ostream& out, int indent) const
 void FuncDefAST::Dump(std::ostream& out, int indent) const
 {
     out << ast_dump_detail::indent(indent) << "FuncDefAST {\n";
-    if (func_type) {
-        out << ast_dump_detail::indent(indent + 2) << "func_type:\n";
-        func_type->Dump(out, indent + 4);
-        out << "\n";
-    }
+
+    out << ast_dump_detail::indent(indent + 2) << "func_type:\n";
+    out << ast_dump_detail::indent(indent + 2)
+        << ast_dump_detail::func_type_to_cstr(func_type) << "\n";
+
     out << ast_dump_detail::indent(indent + 2) << "ident: " << ident << "\n";
     if (block) {
         out << ast_dump_detail::indent(indent + 2) << "block:\n";
@@ -103,17 +113,33 @@ void FuncDefAST::Dump(std::ostream& out, int indent) const
     out << ast_dump_detail::indent(indent) << "}";
 }
 
-void FuncTypeAST::Dump(std::ostream& out, int indent) const
-{
-    out << ast_dump_detail::indent(indent) << "FuncTypeAST { type: " << type << " }";
-}
-
 void FuncFParamAST::Dump(std::ostream& out, int indent) const
 {
     out << ast_dump_detail::indent(indent) << "FuncFParamAST {\n";
     out << ast_dump_detail::indent(indent + 2) << "type: "
         << ast_dump_detail::btype_to_cstr(type) << "\n";
     out << ast_dump_detail::indent(indent + 2) << "ident: " << ident << "\n";
+    std::visit([&](const auto& value) {
+        using T = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<T, Scalar>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: scalar\n";
+        } else if constexpr (std::is_same_v<T, Array>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: array\n";
+            if (!value.array_dim_size.empty()) {
+                out << ast_dump_detail::indent(indent + 2) << "dims:\n";
+                out << ast_dump_detail::indent(indent + 4) << "[]\n";
+                for (const auto& dim : value.array_dim_size) {
+                    if (dim) {
+                        dim->Dump(out, indent + 4);
+                        out << "\n";
+                    }
+                }
+            } else {
+                out << ast_dump_detail::indent(indent + 2) << "dims:\n";
+                out << ast_dump_detail::indent(indent + 4) << "[]\n";
+            }
+        }
+    }, payload);
     out << ast_dump_detail::indent(indent) << "}";
 }
 
@@ -274,31 +300,6 @@ void VarDefAST::Dump(std::ostream& out, int indent) const
                 out << ast_dump_detail::indent(indent + 2) << "init_val:\n";
                 v.init_val->Dump(out, indent + 4);
                 out << "\n";
-            }
-        }
-    },
-               payload);
-    out << ast_dump_detail::indent(indent) << "}";
-}
-
-void InitValAST::Dump(std::ostream& out, int indent) const
-{
-    out << ast_dump_detail::indent(indent) << "InitValAST {\n";
-    std::visit([&](const auto& value) {
-        using T = std::decay_t<decltype(value)>;
-        if constexpr (std::is_same_v<T, ScalarInit>) {
-            out << ast_dump_detail::indent(indent + 2) << "kind: scalar\n";
-            if (value.exp) {
-                value.exp->Dump(out, indent + 4);
-                out << "\n";
-            }
-        } else if constexpr (std::is_same_v<T, ArrayInit>) {
-            out << ast_dump_detail::indent(indent + 2) << "kind: array\n";
-            for (const auto& exp_item : value.inits) {
-                if (exp_item) {
-                    exp_item->Dump(out, indent + 4);
-                    out << "\n";
-                }
             }
         }
     },

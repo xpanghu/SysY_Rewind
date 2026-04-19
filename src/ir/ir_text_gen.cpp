@@ -11,7 +11,6 @@ IRErrorCode IRTextGen::emit(const IRModule& module, std::ostream& out)
 {
     last_error_.clear();
     if (module.funcs_.empty()) {
-        last_error_ = "module has no functions";
         return IRErrorCode::INVALID_ARGUMENT;
     }
 
@@ -49,23 +48,12 @@ IRErrorCode IRTextGen::emit_to_string(const IRModule& module, std::string& out)
 
 void IRTextGen::print_global_value(const IRValue* value, std::ostream& out)
 {
-    if (!value->is_global_alloc()) {
-        throw std::runtime_error("unsupported global value");
-    }
-
     const auto* global_alloc = value->as<IRGlobalAllocInst>();
-    if (global_alloc->type_ == nullptr || !global_alloc->type_->is_pointer()) {
-        throw std::runtime_error("global alloc must have pointer type");
-    }
-
     const auto* alloc_type = global_alloc->type_->as<IRPointerType>();
+
     out << "global " << global_alloc->name_ << " = alloc ";
     print_type(alloc_type->base_type, out);
     out << ", ";
-
-    if (global_alloc->init_ == nullptr) {
-        throw std::runtime_error("global alloc must have initializer");
-    }
 
     switch (global_alloc->init_->kind_) {
     case IRValueKind::IR_ZERO_INIT:
@@ -179,12 +167,10 @@ void IRTextGen::print_instruction(const IRValue* inst, std::ostream& out)
     case rewind_ir::IRValueKind::IR_ALLOC: {
         const auto* alloc = inst->as<IRAllocInst>();
         out << "  " << alloc->name_ << " = ";
+        out << "alloc ";
         if (alloc->type_->is_pointer()) {
             const auto* alloc_type = alloc->type_->as<IRPointerType>();
-            out << "alloc ";
             print_type(alloc_type->base_type, out);
-        } else {
-            throw std::runtime_error("alloc instruction must have pointer type");
         }
         break;
     }
