@@ -76,6 +76,7 @@ class DeclAST;
 class ConstDeclAST;
 class ConstDefAST;
 class ConstInitValAST;
+class InitValAST;
 class LValAST;
 
 // 所有 AST 的基类
@@ -204,6 +205,24 @@ public:
     void Dump(std::ostream& out, int indent = 0) const override;
 };
 
+// InitValAST
+class InitValAST : public BaseAST
+{
+public:
+    struct ExprInit {
+        std::unique_ptr<BaseAST> exp;
+    };
+
+    struct ArrayInit {
+        std::vector<std::unique_ptr<BaseAST>> inits; // vector of InitValAST
+    };
+
+    using Payload = std::variant<ExprInit, ArrayInit>;
+    Payload payload;
+
+    void Dump(std::ostream& out, int indent = 0) const override;
+};
+
 // VarDecl
 class VarDeclAST : public BaseAST
 {
@@ -235,7 +254,7 @@ public:
     struct InitializedArray {
         std::string ident;
         std::vector<std::unique_ptr<BaseAST>> const_dims; // multiple [ConstExp] for multi-dimensional array
-        std::unique_ptr<BaseAST> init_val;                // ConstInitValAST
+        std::unique_ptr<BaseAST> init_val;                // InitValAST
     };
 
     using Payload = std::variant<UninitializedScalar, InitializedScalar, UninitializedArray, InitializedArray>;
@@ -460,6 +479,7 @@ class LValAST : public BaseAST
 {
 public:
     std::string ident;
+
     std::vector<std::unique_ptr<BaseAST>> indices; // multiple [Exp] for multi-dimensional array access
 
     void Dump(std::ostream& out, int indent = 0) const override;

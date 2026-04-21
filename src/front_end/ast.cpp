@@ -139,7 +139,8 @@ void FuncFParamAST::Dump(std::ostream& out, int indent) const
                 out << ast_dump_detail::indent(indent + 4) << "[]\n";
             }
         }
-    }, payload);
+    },
+               payload);
     out << ast_dump_detail::indent(indent) << "}";
 }
 
@@ -234,6 +235,31 @@ void ConstInitValAST::Dump(std::ostream& out, int indent) const
             for (const auto& exp_item : value.const_inits) {
                 if (exp_item) {
                     exp_item->Dump(out, indent + 4);
+                    out << "\n";
+                }
+            }
+        }
+    },
+               payload);
+    out << ast_dump_detail::indent(indent) << "}";
+}
+
+void InitValAST::Dump(std::ostream& out, int indent) const
+{
+    out << ast_dump_detail::indent(indent) << "InitValAST {\n";
+    std::visit([&](const auto& value) {
+        using T = std::decay_t<decltype(value)>;
+        if constexpr (std::is_same_v<T, ExprInit>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: scalar\n";
+            if (value.exp) {
+                value.exp->Dump(out, indent + 4);
+                out << "\n";
+            }
+        } else if constexpr (std::is_same_v<T, ArrayInit>) {
+            out << ast_dump_detail::indent(indent + 2) << "kind: array\n";
+            for (const auto& init_item : value.inits) {
+                if (init_item) {
+                    init_item->Dump(out, indent + 4);
                     out << "\n";
                 }
             }
@@ -655,17 +681,6 @@ void PrimaryExpAST::Dump(std::ostream& out, int indent) const
 void LValAST::Dump(std::ostream& out, int indent) const
 {
     out << ast_dump_detail::indent(indent) << "LValAST {\n";
-    out << ast_dump_detail::indent(indent + 2) << "ident: " << ident;
-    if (!indices.empty()) {
-        out << "[";
-        for (size_t i = 0; i < indices.size(); ++i) {
-            if (i > 0) out << "][";
-            if (indices[i]) {
-                indices[i]->Dump(out, 0);
-            }
-            out << "]";
-        }
-    }
     out << "\n";
     out << ast_dump_detail::indent(indent) << "}";
 }

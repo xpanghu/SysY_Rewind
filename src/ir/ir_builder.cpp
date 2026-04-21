@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <exception>
 #include <functional>
+#include <memory>
 #include <numeric>
 #include <stdexcept>
 #include <type_traits>
@@ -57,23 +58,46 @@ inline const IRFunctionType* get_function_type(std::vector<const IRType*> params
     return IRTypeContext::instance().getFunction(std::move(params), ret);
 }
 
-inline const IRArrayType* get_array_storage_type(const IRValue* storage)
+inline const IRType* get_array_storage_type(const IRValue* storage)
 {
     if (!storage->type_->is_pointer()) {
         return nullptr;
     }
 
     const auto* pointer_type = storage->type_->as<IRPointerType>();
-    if (!pointer_type->base_type->is_array()) {
-        return nullptr;
+    if (pointer_type->base_type->is_array() || pointer_type->base_type->is_pointer()) {
+        return pointer_type->base_type;
     }
 
-    return pointer_type->base_type->as<IRArrayType>();
+    return nullptr;
 }
 
 inline bool is_array_storage(const IRValue* storage)
 {
     return get_array_storage_type(storage) != nullptr;
+}
+
+inline bool is_call_arg_type_compatible(const IRType* actual, const IRType* expected)
+{
+    if (actual == expected) {
+        return true;
+    }
+
+    if (actual == nullptr || expected == nullptr) {
+        return false;
+    }
+
+    if (!actual->is_pointer() || !expected->is_pointer()) {
+        return false;
+    }
+
+    const auto* actual_base = actual->as<IRPointerType>()->base_type;
+    if (!actual_base->is_array()) {
+        return false;
+    }
+
+    const auto* decayed_type = get_pointer_type(actual_base->as<IRArrayType>()->element_type);
+    return decayed_type == expected;
 }
 
 const LValAST* try_extract_lvalue(const BaseAST& node)
@@ -288,15 +312,16 @@ void RewindIRBuilder::lower_comp_unit(const CompUnitAST& ast,
     declare_library_function(module);
 
     for (const auto& item : ast.items) {
+        if (const auto* global_decl = dynamic_cast<const DeclAST*>(item.get())) {
+            lower_global_decl(*global_decl, module);
+        }
+
         if (const auto* func_def = dynamic_cast<const FuncDefAST*>(item.get())) {
             declare_function(*func_def, module);
         }
     }
 
     for (const auto& item : ast.items) {
-        if (const auto* global_decl = dynamic_cast<const DeclAST*>(item.get())) {
-            lower_global_decl(*global_decl, module);
-        }
         if (const auto* func_def = dynamic_cast<const FuncDefAST*>(item.get())) {
             lower_func_def(*func_def, module);
         }
@@ -345,15 +370,16 @@ IRFunction* RewindIRBuilder::declare_function(const FuncDefAST& ast, IRModule& m
     // Note : not define variable in symbol table
     size_t param_index = 0;
     for (const auto& item : ast.func_f_params) {
-        const auto& func_f_param =
-            expect_node<FuncFParamAST>(*item, "FuncFParam");
+        const auto& func_f_param = expect_node<FuncFParamAST>(*item, "FuncFParam");
+        size_t current_param_index = param_index;
+        const IRType* param_type = func_type->params[current_param_index];
 
         auto* arg_ref = module.make_value<IRFuncArgRef>(
-            param_index,
-            func_type->params[param_index++],
-            "@" + func_f_param.ident);
-
+            current_param_index,
+            param_type,
+            "@" + ast.ident + "_" + func_f_param.ident);
         module.append_param(*func, *arg_ref);
+        param_index++;
     }
     return func;
 }
@@ -377,50 +403,46 @@ void RewindIRBuilder::lower_global_decl(const DeclAST& ast, IRModule& module)
                         module_symbols_.define_const(const_expr.ident, value);
                     },
                     [&](const ConstDefAST::ConstArray& const_array) {
-                        // get array length
                         if (const_array.const_dims.empty()) {
                             throw std::runtime_error("array must have at least one dimension: "
                                                      + const_array.ident);
                         }
 
-                        // check if init is array
                         const auto& init_val =
                             expect_node<ConstInitValAST>(*const_array.const_init_val, "ConstInitValAST");
-
                         if (std::holds_alternative<ConstInitValAST::ConstExprInit>(init_val.payload)) {
                             throw std::runtime_error(const_array.ident + "is array, init must be array");
                         }
 
-                        // get array dims
                         std::vector<int32_t> array_dims;
                         array_dims.reserve(const_array.const_dims.size());
                         for (const auto& item : const_array.const_dims) {
                             const auto& size_exp = expect_node<ExpAST>(*item, "ExpAST");
                             array_dims.push_back(eval_exp(size_exp));
                         }
-                        int32_t length = array_dims.empty() ?
-                                             0 :
-                                             std::accumulate(array_dims.begin(), array_dims.end(), 1, std::multiplies<int32_t>());
+
+                        const int32_t length = std::accumulate(
+                            array_dims.begin(),
+                            array_dims.end(),
+                            1,
+                            std::multiplies<int32_t>());
+
                         if (length <= 0) {
                             throw std::runtime_error("array length must be positive : " + const_array.ident);
                         }
 
-                        // get array init
                         std::vector<int32_t> target_buffer;
                         target_buffer.reserve(length);
-                        processConstArrayInit(init_val, array_dims, target_buffer);
+                        process_const_array_init(init_val, array_dims, target_buffer);
 
-                        std::vector<IRValue*> elems;
-                        elems.reserve(length);
-                        for (const auto& item : target_buffer) {
-                            elems.push_back(get_or_create_constant(item, module));
-                        }
-
-                        // set array type - build nested array type for multi-dimensional array
                         auto* array_type = get_array_type(array_dims, get_i32_type());
+                        size_t cursor = 0;
+                        auto* init_aggregate = build_array_aggregate_from_flat(
+                            array_type,
+                            target_buffer,
+                            cursor,
+                            module);
 
-                        // alloc global const array
-                        auto* init_aggregate = module.make_value<IRAggregate>(std::move(elems), array_type);
                         auto* global_alloc = module.make_value<IRGlobalAllocInst>(
                             init_aggregate,
                             get_pointer_type(array_type),
@@ -443,29 +465,31 @@ void RewindIRBuilder::lower_global_decl(const DeclAST& ast, IRModule& module)
 
             std::visit(
                 overloaded{
-                    [&](const VarDefAST::UninitializedScalar& uninit_var) {
+                    [&](const VarDefAST::UninitializedScalar& uninit_scalar) {
                         // set zero to the default init of global value
                         auto* zero_init = module.make_value<IRZeroInit>(i32_type);
                         auto* global_alloc = module.make_value<IRGlobalAllocInst>(
                             zero_init,
                             i32_ptr_type,
-                            "@" + uninit_var.ident);
+                            "@" + uninit_scalar.ident);
                         module.append_global_value(*global_alloc);
-                        module_symbols_.define_var(uninit_var.ident, global_alloc);
+                        module_symbols_.define_var(uninit_scalar.ident, global_alloc);
                     },
-                    [&](const VarDefAST::InitializedScalar& init_var) {
+                    [&](const VarDefAST::InitializedScalar& init_scalar) {
                         // eval init value
                         // init value must be constexpr
-                        const auto& exp_ast = expect_node<ExpAST>(*init_var.init_val, "ExpAST");
+                        const auto& init_val = expect_node<InitValAST>(*init_scalar.init_val, "InitValAST");
+                        const auto& expr_init = std::get<InitValAST::ExprInit>(init_val.payload);
+                        const auto& exp_ast = expect_node<ExpAST>(*expr_init.exp, "ExpAST");
 
-                        auto init_val = get_or_create_constant(eval_exp(exp_ast), module);
+                        auto init_value = get_or_create_constant(eval_exp(exp_ast), module);
 
                         auto* global_alloc = module.make_value<IRGlobalAllocInst>(
-                            init_val,
+                            init_value,
                             i32_ptr_type,
-                            "@" + init_var.ident);
+                            "@" + init_scalar.ident);
                         module.append_global_value(*global_alloc);
-                        module_symbols_.define_var(init_var.ident, global_alloc);
+                        module_symbols_.define_var(init_scalar.ident, global_alloc);
                     },
                     [&](const VarDefAST::UninitializedArray& uninit_array) {
                         // get array size
@@ -499,48 +523,47 @@ void RewindIRBuilder::lower_global_decl(const DeclAST& ast, IRModule& module)
                         module_symbols_.define_var(uninit_array.ident, global_alloc);
                     },
                     [&](const VarDefAST::InitializedArray& init_array) {
-                        // get array size
                         if (init_array.const_dims.empty()) {
                             throw std::runtime_error("array must have at least one dimension: "
                                                      + init_array.ident);
                         }
-                        std::vector<int32_t> array_dims;
-                        for (const auto& item : init_array.const_dims) {
-                            const auto& exp_ast = expect_node<ExpAST>(*item, "ExpAST");
-                            array_dims.push_back(eval_exp(exp_ast));
-                        }
 
-                        auto length = std::accumulate(array_dims.begin(), array_dims.end(),
-                                                      1, std::multiplies<int32_t>());
-                        if (length <= 0) {
-                            throw std::runtime_error("array length must be positive: " + init_array.ident);
-                        }
-
-                        // get array init
-                        const auto& array_init =
-                            expect_node<ConstInitValAST>(*init_array.init_val, "InitValAST");
-
-                        if (std::holds_alternative<ConstInitValAST::ConstExprInit>(array_init.payload)) {
+                        const auto& init_val =
+                            expect_node<InitValAST>(*init_array.init_val, "InitValAST");
+                        if (std::holds_alternative<InitValAST::ExprInit>(init_val.payload)) {
                             throw std::runtime_error(init_array.ident + "is array, init must be array");
+                        }
+
+                        std::vector<int32_t> array_dims;
+                        array_dims.reserve(init_array.const_dims.size());
+                        for (const auto& item : init_array.const_dims) {
+                            const auto& size_exp = expect_node<ExpAST>(*item, "ExpAST");
+                            array_dims.push_back(eval_exp(size_exp));
+                        }
+
+                        const int32_t length = std::accumulate(
+                            array_dims.begin(),
+                            array_dims.end(),
+                            1,
+                            std::multiplies<int32_t>());
+                        if (length <= 0) {
+                            throw std::runtime_error("array length must be positive : " + init_array.ident);
                         }
 
                         std::vector<int32_t> target_buffer;
                         target_buffer.reserve(length);
-                        processConstArrayInit(array_init, array_dims, target_buffer);
+                        process_array_init_const(init_val, array_dims, target_buffer);
 
-                        std::vector<IRValue*> elems;
-                        elems.reserve(length);
-                        for (const auto& item : target_buffer) {
-                            elems.push_back(get_or_create_constant(item, module));
-                        }
-
-                        // set array type
                         auto* array_type = get_array_type(array_dims, get_i32_type());
+                        size_t cursor = 0;
+                        auto* init_aggregate = build_array_aggregate_from_flat(
+                            array_type,
+                            target_buffer,
+                            cursor,
+                            module);
 
-                        // alloc global array
-                        auto* init = module.make_value<IRAggregate>(std::move(elems), array_type);
                         auto* global_alloc = module.make_value<IRGlobalAllocInst>(
-                            init,
+                            init_aggregate,
                             get_pointer_type(array_type),
                             "@" + init_array.ident);
 
@@ -618,7 +641,6 @@ IRFunction* RewindIRBuilder::lower_func_def(const FuncDefAST& ast, IRModule& mod
 const IRType* RewindIRBuilder::lower_func_f_params(const FuncFParamAST& ast)
 {
     if (auto array_value = std::get_if<FuncFParamAST::Array>(&ast.payload)) {
-        // ? expand
         const IRType* base_type = get_i32_type();
 
         if (array_value->array_dim_size.size() == 0) {
@@ -719,18 +741,19 @@ void RewindIRBuilder::lower_const_decl(const ConstDeclAST& ast)
                     // flatten nested array initialization into a linear buffer
                     std::vector<int32_t> target_buffer;
                     target_buffer.reserve(length);
-                    processConstArrayInit(init_val, array_dims, target_buffer);
+                    process_const_array_init(init_val, array_dims, target_buffer);
 
-                    std::vector<IRValue*> elems;
-                    elems.reserve(length);
-                    for (const auto& item : target_buffer) {
-                        elems.push_back(get_or_create_constant(item, current_ctx_->module()));
-                    }
-
-                    auto* init_aggregate = current_ctx_->module().make_value<IRAggregate>(std::move(elems), array_type);
+                    size_t cursor = 0;
+                    auto* init_aggregate = build_array_aggregate_from_flat(
+                        array_type,
+                        target_buffer,
+                        cursor,
+                        current_ctx_->module());
 
                     static_cast<void>(current_ctx_->create_block_value<IRStoreInst>(
-                        init_aggregate, &alloc, get_unit_type()));
+                        init_aggregate,
+                        &alloc,
+                        get_unit_type()));
                 }},
             def.payload);
     }
@@ -745,22 +768,24 @@ void RewindIRBuilder::lower_var_decl(const VarDeclAST& ast)
         std::visit(
             overloaded{
                 // int x;
-                [&](const VarDefAST::UninitializedScalar& uninit_var) {
+                [&](const VarDefAST::UninitializedScalar& uninit_scalar) {
                     auto& alloc = current_ctx_->create_block_value<IRAllocInst>(
                         i32_ptr_type,
-                        current_ctx_->next_at_name(uninit_var.ident));
-                    current_ctx_->symbols().define_var(uninit_var.ident, &alloc);
+                        current_ctx_->next_at_name(uninit_scalar.ident));
+                    current_ctx_->symbols().define_var(uninit_scalar.ident, &alloc);
                 },
                 // int x = 10;
-                [&](const VarDefAST::InitializedScalar& init_var) {
+                [&](const VarDefAST::InitializedScalar& init_scalar) {
                     // alloc variable
                     auto& alloc = current_ctx_->create_block_value<IRAllocInst>(
                         i32_ptr_type,
-                        current_ctx_->next_at_name(init_var.ident));
-                    current_ctx_->symbols().define_var(init_var.ident, &alloc);
+                        current_ctx_->next_at_name(init_scalar.ident));
+                    current_ctx_->symbols().define_var(init_scalar.ident, &alloc);
 
                     // get init
-                    const auto& exp_ast = expect_node<ExpAST>(*init_var.init_val, "ExpAST");
+                    const auto& init_val = expect_node<InitValAST>(*init_scalar.init_val, "InitValAST");
+                    const auto& expr_init = std::get<InitValAST::ExprInit>(init_val.payload);
+                    const auto& exp_ast = expect_node<ExpAST>(*expr_init.exp, "ExpAST");
 
                     auto init_value = lower_exp(exp_ast);
 
@@ -828,27 +853,15 @@ void RewindIRBuilder::lower_var_decl(const VarDeclAST& ast)
                     current_ctx_->symbols().define_var(init_array.ident, &alloc);
 
                     // local array init
-                    const auto& array_init = expect_node<ConstInitValAST>(*init_array.init_val, "ConstInitValAST");
-                    if (std::holds_alternative<ConstInitValAST::ConstExprInit>(array_init.payload)) {
+                    const auto& array_init = expect_node<InitValAST>(*init_array.init_val, "InitValAST");
+                    if (std::holds_alternative<InitValAST::ExprInit>(array_init.payload)) {
                         throw std::runtime_error(init_array.ident + "is array, init must be array");
                     }
 
-                    std::vector<int32_t> target_buffer;
+                    std::vector<IRValue*> target_buffer;
                     target_buffer.reserve(length);
-                    processConstArrayInit(array_init, array_dims, target_buffer);
-
-                    std::vector<IRValue*> elems;
-                    for (const auto& item : target_buffer) {
-                        elems.push_back(get_or_create_constant(item, current_ctx_->module()));
-                    }
-                    elems.reserve(length);
-
-                    auto* init = current_ctx_->module().make_value<IRAggregate>(std::move(elems), array_type);
-
-                    static_cast<void>(current_ctx_->create_block_value<IRStoreInst>(
-                        init,
-                        &alloc,
-                        get_unit_type()));
+                    process_array_init_runtime(array_init, array_dims, target_buffer);
+                    local_array_init(&alloc, array_dims, target_buffer);
                 },
             },
             def.payload);
@@ -980,6 +993,9 @@ void RewindIRBuilder::lower_stmt(const StmtAST& ast)
                 auto& while_body = current_ctx_->create_function_block("while_body");
                 auto& end = current_ctx_->create_function_block("end");
 
+                // record break and continue basic block
+                current_ctx_->push_loop(end, while_entry);
+
                 // preheader -> while_entry
                 static_cast<void>(current_ctx_->terminate_with_jump(while_entry));
 
@@ -992,9 +1008,6 @@ void RewindIRBuilder::lower_stmt(const StmtAST& ast)
                     cond,
                     while_body,
                     end));
-
-                // record break and continue basic block
-                current_ctx_->push_loop(end, while_entry);
 
                 // while_body:
                 //   lower body
@@ -1145,7 +1158,9 @@ IRValue* RewindIRBuilder::lower_lor_exp(const LOrExpAST& ast)
                 // merge basic block
                 current_ctx_->set_current_block(merge);
                 return &current_ctx_->create_block_value<IRLoadInst>(
-                    &result_slot, get_i32_type(), current_ctx_->next_percent_name());
+                    &result_slot,
+                    get_i32_type(),
+                    current_ctx_->next_percent_name());
             }},
         ast.payload);
 }
@@ -1219,7 +1234,9 @@ IRValue* RewindIRBuilder::lower_land_exp(const LAndExpAST& ast)
                 // % = load @result
                 current_ctx_->set_current_block(merge);
                 return &current_ctx_->create_block_value<IRLoadInst>(
-                    &result_slot, get_i32_type(), current_ctx_->next_percent_name());
+                    &result_slot,
+                    get_i32_type(),
+                    current_ctx_->next_percent_name());
             }},
         ast.payload);
 }
@@ -1356,6 +1373,7 @@ IRValue* RewindIRBuilder::lower_unary_exp(const UnaryExpAST& ast)
             [&](const UnaryExpAST::FuncCall& funcCall) -> IRValue* {
                 // check if function exist
                 auto* callee = lookup_function(funcCall.ident);
+
                 if (callee == nullptr) {
                     throw std::runtime_error("undefined function: " + funcCall.ident);
                 }
@@ -1365,14 +1383,16 @@ IRValue* RewindIRBuilder::lower_unary_exp(const UnaryExpAST& ast)
                 if (funcCall.func_r_params != nullptr) {
                     const auto& func_r_params =
                         expect_node<FuncRParamsAST>(*funcCall.func_r_params, "FuncRParamsAST");
+
                     if (func_r_params.exps.size() != callee->type_->params.size()) {
                         throw std::runtime_error(
                             "function argument count mismatch: " + funcCall.ident);
                     }
+
                     for (size_t i = 0; i < func_r_params.exps.size(); ++i) {
                         const auto& item = func_r_params.exps[i];
-                        const auto& exp = expect_node<ExpAST>(*item, "ExpAST");
-                        args.push_back(lower_call_arg(exp, callee->type_->params[i]));
+                        const auto& exp_ast = expect_node<ExpAST>(*item, "ExpAST");
+                        args.push_back(lower_call_arg(exp_ast, callee->type_->params[i]));
                     }
                 }
 
@@ -1384,7 +1404,7 @@ IRValue* RewindIRBuilder::lower_unary_exp(const UnaryExpAST& ast)
                 }
 
                 for (size_t i = 0; i < args.size(); ++i) {
-                    if (args[i]->type_ != callee->params_[i]->type_) {
+                    if (!is_call_arg_type_compatible(args[i]->type_, callee->type_->params[i])) {
                         throw std::runtime_error(
                             "function argument type mismatch: " + funcCall.ident);
                     }
@@ -1407,6 +1427,88 @@ IRValue* RewindIRBuilder::lower_unary_exp(const UnaryExpAST& ast)
         ast.payload);
 }
 
+IRValue* RewindIRBuilder::lower_call_arg(const ExpAST& ast, const IRType* expected_ty)
+{
+    // scalar
+    if (expected_ty->is_int32()) {
+        return lower_exp(ast);
+    }
+
+    // pointer-like actual argument, mainly array decay
+    if (expected_ty->is_pointer()) {
+        const auto* lval_ast = try_extract_lvalue(ast);
+
+        // not variable
+        if (lval_ast == nullptr) {
+            throw std::runtime_error("actual param type not match formal param");
+        }
+
+        // not found or constant
+        auto lval = lookup_value(lval_ast->ident);
+        if (!lval || !std::holds_alternative<SymbolTable::Var>(*lval)) {
+            throw std::runtime_error("actual param type not match formal param");
+        }
+
+        // not array
+        auto* storage = std::get<SymbolTable::Var>(*lval).alloc;
+        if (!is_array_storage(storage)) {
+            throw std::runtime_error("actual param type not match formal param");
+        }
+
+        IRValue* actual = nullptr;
+        IRValue* zero_value = get_or_create_constant(0, current_ctx_->module());
+
+        // two array type:
+        // *[i32, ... ]
+        // **i32
+        if (lval_ast->indices.empty()) {
+            const IRType* storage_type = get_array_storage_type(storage);
+            if (storage_type->is_array()) {
+                const IRType* elem_type = storage_type->as<IRArrayType>()->element_type;
+                actual = &current_ctx_->create_block_value<IRGetElemPtrInst>(
+                    storage,
+                    zero_value,
+                    get_pointer_type(elem_type),
+                    current_ctx_->next_percent_name());
+            } else if (storage_type->is_pointer()) {
+                IRValue* loaded_ptr = &current_ctx_->create_block_value<IRLoadInst>(
+                    storage,
+                    storage_type,
+                    current_ctx_->next_percent_name());
+                actual = loaded_ptr;
+            }
+        } else {
+            actual = lower_lval_address(*lval_ast, true);
+        }
+
+        if (actual == nullptr) {
+            throw std::runtime_error("actual param type not match formal param");
+        }
+
+        if (actual->type_ == expected_ty) {
+            return actual;
+        }
+
+        // ? don't know what its function
+        if (actual->type_->is_pointer()) {
+            const auto* actual_base = actual->type_->as<IRPointerType>()->base_type;
+            if (actual_base->is_array()) {
+                const auto* decayed_type =
+                    get_pointer_type(actual_base->as<IRArrayType>()->element_type);
+
+                if (decayed_type == expected_ty) {
+                    return &current_ctx_->create_block_value<IRGetElemPtrInst>(
+                        actual,
+                        zero_value,
+                        decayed_type,
+                        current_ctx_->next_percent_name());
+                }
+            }
+        }
+    }
+    throw std::runtime_error("lower_call_arg error");
+}
+
 IRValue* RewindIRBuilder::lower_primary_exp(const PrimaryExpAST& ast)
 {
     return std::visit(
@@ -1425,82 +1527,127 @@ IRValue* RewindIRBuilder::lower_primary_exp(const PrimaryExpAST& ast)
         ast.payload);
 }
 
+IRValue* RewindIRBuilder::lower_lval_array_address(const LValAST& ast,
+                                                   IRValue* current_ptr,
+                                                   const IRType* current_elem_type,
+                                                   bool allow_array_decay)
+{
+    size_t array_dim = current_elem_type->as<IRArrayType>()->getArrayDim();
+
+    if (array_dim < ast.indices.size()) {
+        throw std::runtime_error("too many indices for array: " + ast.ident);
+    }
+
+    if (array_dim > ast.indices.size() && !allow_array_decay) {
+        if (ast.indices.empty()) {
+            throw std::runtime_error("array is not assignable without index: " + ast.ident);
+        }
+        throw std::runtime_error("less indices for array: " + ast.ident);
+    }
+
+    // chain getelemptr for multi-dimensional array access
+    for (size_t i = 0; i < ast.indices.size(); ++i) {
+        const auto& exp_ast = expect_node<ExpAST>(*ast.indices[i], "ExpAST");
+        auto* index = lower_exp(exp_ast);
+
+        // determine pointer type for next level
+        current_elem_type = current_elem_type->as<IRArrayType>()->element_type;
+
+        auto& ptr = current_ctx_->create_block_value<IRGetElemPtrInst>(
+            current_ptr,
+            index,
+            get_pointer_type(current_elem_type),
+            current_ctx_->next_percent_name());
+        current_ptr = &ptr;
+    }
+
+    return current_ptr;
+}
+
+IRValue* RewindIRBuilder::lower_lval_pointer_address(const LValAST& ast,
+                                                     IRValue* current_ptr,
+                                                     const IRType* current_elem_type,
+                                                     bool allow_array_decay)
+{
+    IRValue* loaded_ptr = &current_ctx_->create_block_value<IRLoadInst>(
+        current_ptr,
+        current_elem_type,
+        current_ctx_->next_percent_name());
+
+    if (ast.indices.empty()) {
+        if (!allow_array_decay) {
+            throw std::runtime_error("array is not assignable without index: " + ast.ident);
+        }
+        return loaded_ptr;
+    }
+
+    const auto& first_index_ast = expect_node<ExpAST>(*ast.indices[0], "ExpAST");
+    auto* first_index = lower_exp(first_index_ast);
+    current_elem_type = current_elem_type->as<IRPointerType>()->base_type;
+
+    current_ptr = &current_ctx_->create_block_value<IRGetPtrInst>(
+        loaded_ptr,
+        first_index,
+        get_pointer_type(current_elem_type),
+        current_ctx_->next_percent_name());
+
+    size_t remaining_dim = current_elem_type->is_array() ? current_elem_type->as<IRArrayType>()->getArrayDim() : 0;
+    size_t provided_remaining = ast.indices.size() - 1;
+
+    if (provided_remaining > remaining_dim) {
+        throw std::runtime_error("too many indices for array: " + ast.ident);
+    }
+
+    if (provided_remaining < remaining_dim && !allow_array_decay) {
+        throw std::runtime_error("less indices for array: " + ast.ident);
+    }
+
+    for (int i = 1; i < ast.indices.size(); i++) {
+        const auto& exp_ast = expect_node<ExpAST>(*ast.indices[i], "ExpAST");
+        auto* index = lower_exp(exp_ast);
+
+        current_elem_type = current_elem_type->as<IRArrayType>()->element_type;
+
+        auto& ptr = current_ctx_->create_block_value<IRGetElemPtrInst>(
+            current_ptr,
+            index,
+            get_pointer_type(current_elem_type),
+            current_ctx_->next_percent_name());
+        current_ptr = &ptr;
+    }
+    return current_ptr;
+}
+
 IRValue* RewindIRBuilder::lower_lval_rvalue(const LValAST& ast)
 {
     auto lval = lookup_value(ast.ident);
+
     if (!lval) {
         throw std::runtime_error(ast.ident + " is not exist");
     }
 
-    if (lval && std::holds_alternative<SymbolTable::Var>(*lval)
-        && !is_array_storage(std::get<SymbolTable::Var>(*lval).alloc)
-        && std::get<SymbolTable::Var>(*lval).alloc->type_ != nullptr
-        && std::get<SymbolTable::Var>(*lval).alloc->type_->is_pointer()
-        && !ast.indices.empty()) {
-        auto* var = std::get<SymbolTable::Var>(*lval).alloc;
-        IRValue* current_ptr = var;
-        const auto* pointee_type = var->type_->as<IRPointerType>()->base_type;
-
-        for (size_t i = 0; i < ast.indices.size(); ++i) {
-            const auto& exp_ast = expect_node<ExpAST>(*ast.indices[i], "ExpAST");
-            auto* index = lower_exp(exp_ast);
-            const IRType* next_type = pointee_type;
-            if (pointee_type != nullptr && pointee_type->is_array()) {
-                next_type = pointee_type->as<IRArrayType>()->element_type;
-            }
-
-            auto& ptr = current_ctx_->create_block_value<IRGetPtrInst>(
-                current_ptr,
-                index,
-                get_pointer_type(next_type),
-                current_ctx_->next_percent_name());
-            current_ptr = &ptr;
-            pointee_type = next_type;
-        }
-
-        return &current_ctx_->create_block_value<IRLoadInst>(
-            current_ptr,
-            get_i32_type(),
-            current_ctx_->next_percent_name());
+    // constexpr
+    if (std::holds_alternative<SymbolTable::Constant>(*lval)) {
+        return get_or_create_constant(
+            std::get<SymbolTable::Constant>(*lval).value,
+            current_ctx_->module());
     }
 
+    auto* var = std::get<SymbolTable::Var>(*lval).alloc;
+
     // array
-    if (lval && std::holds_alternative<SymbolTable::Var>(*lval)
-        && is_array_storage(std::get<SymbolTable::Var>(*lval).alloc)) {
+    if (is_array_storage(var)) {
         if (ast.indices.empty()) {
             throw std::runtime_error("array value is not supported without index: " + ast.ident);
         }
 
-        auto* var = std::get<SymbolTable::Var>(*lval).alloc;
         IRValue* current_ptr = var;
-
         const IRType* current_elem_type = get_array_storage_type(var);
-        size_t array_dim = current_elem_type->as<IRArrayType>()->getArrayDim();
 
-        if (array_dim < ast.indices.size()) {
-            throw std::runtime_error("too many indices for array: " + ast.ident);
-        } else if (array_dim > ast.indices.size()) {
-            throw std::runtime_error("less indices for array: " + ast.ident);
-        }
-
-        // chain getelemptr for multi-dimensional array access
-        for (size_t i = 0; i < array_dim; ++i) {
-            const auto& exp_ast = expect_node<ExpAST>(*ast.indices[i], "ExpAST");
-            int32_t index = eval_exp(exp_ast);
-            if (index >= current_elem_type->as<IRArrayType>()->length) {
-                throw std::runtime_error("index " + std::to_string(index)
-                                         + " is past the end of the array " + ast.ident);
-            }
-
-            // determine pointer type for next level
-            current_elem_type = current_elem_type->as<IRArrayType>()->element_type;
-
-            auto& ptr = current_ctx_->create_block_value<IRGetElemPtrInst>(
-                current_ptr,
-                get_or_create_constant(index, current_ctx_->module()),
-                get_pointer_type(current_elem_type),
-                current_ctx_->next_percent_name());
-            current_ptr = &ptr;
+        if (current_elem_type->is_array()) {
+            current_ptr = lower_lval_array_address(ast, current_ptr, current_elem_type, false);
+        } else if (current_elem_type->is_pointer()) {
+            current_ptr = lower_lval_pointer_address(ast, current_ptr, current_elem_type, false);
         }
 
         return &current_ctx_->create_block_value<IRLoadInst>(
@@ -1509,32 +1656,22 @@ IRValue* RewindIRBuilder::lower_lval_rvalue(const LValAST& ast)
             current_ctx_->next_percent_name());
     }
 
-    if (lval && !ast.indices.empty()) {
+    if (!ast.indices.empty()) {
         throw std::runtime_error(ast.ident + " is not array");
     }
 
-    if (lval) {
-        const auto& value = *lval;
-        // constexpr
-        if (std::holds_alternative<SymbolTable::Constant>(value)) {
-            return get_or_create_constant(
-                std::get<SymbolTable::Constant>(value).value,
-                current_ctx_->module());
-        }
-
-        // local scalar variable
-        return &current_ctx_->create_block_value<IRLoadInst>(
-            std::get<SymbolTable::Var>(value).alloc,
-            get_i32_type(),
-            current_ctx_->next_percent_name());
-    }
-    throw std::runtime_error("undefined identifier: " + ast.ident);
+    // scalar
+    return &current_ctx_->create_block_value<IRLoadInst>(
+        var,
+        get_i32_type(),
+        current_ctx_->next_percent_name());
 }
 
 IRValue* RewindIRBuilder::lower_lval_address(const LValAST& ast, bool allow_array_decay)
 {
     // check if value can be modified
     auto lval = lookup_value(ast.ident);
+
     if (!lval) {
         throw std::runtime_error(ast.ident + " is not exist");
     }
@@ -1543,73 +1680,26 @@ IRValue* RewindIRBuilder::lower_lval_address(const LValAST& ast, bool allow_arra
         throw std::runtime_error(ast.ident + " is constant");
     }
 
-    // get array address
     const auto& var_info = std::get<SymbolTable::Var>(*lval);
     if (var_info.is_const) {
         throw std::runtime_error(ast.ident + " is const");
     }
 
     auto* var = var_info.alloc;
+
     // array
     if (is_array_storage(var)) {
         // chain getelemptr for multi-dimensional array access
         IRValue* current_ptr = var;
         const IRType* current_elem_type = get_array_storage_type(current_ptr);
-        size_t array_dim = current_elem_type->as<IRArrayType>()->getArrayDim();
 
-        if (array_dim < ast.indices.size()) {
-            throw std::runtime_error("too many indices for array: " + ast.ident);
+        if (current_elem_type->is_array()) {
+            current_ptr = lower_lval_array_address(ast, current_ptr, current_elem_type, allow_array_decay);
+        } else if (current_elem_type->is_pointer()) {
+            current_ptr = lower_lval_pointer_address(ast, current_ptr, current_elem_type, allow_array_decay);
         }
-        if (!allow_array_decay && array_dim > ast.indices.size()) {
-            if (ast.indices.empty()) {
-                throw std::runtime_error("array is not assignable without index: " + ast.ident);
-            }
-            throw std::runtime_error("less indices for array: " + ast.ident);
-        }
-
-        for (size_t i = 0; i < ast.indices.size(); ++i) {
-            // check if index is past the end of the array
-            const auto& index_exp = expect_node<ExpAST>(*ast.indices[i], "ExpAST");
-            int32_t index = eval_exp(index_exp);
-            if (index >= current_elem_type->as<IRArrayType>()->length) {
-                throw std::runtime_error("index " + std::to_string(index)
-                                         + " is past the end of the array " + current_ptr->name_);
-            }
-
-            // determine pointer type for next level
-            current_elem_type = current_elem_type->as<IRArrayType>()->element_type;
-
-            auto& ptr = current_ctx_->create_block_value<IRGetElemPtrInst>(
-                current_ptr,
-                get_or_create_constant(index, current_ctx_->module()),
-                get_pointer_type(current_elem_type),
-                current_ctx_->next_percent_name());
-            current_ptr = &ptr;
-        }
-
-        if (allow_array_decay && ast.indices.size() < array_dim) {
-            const auto* remaining_type =
-                current_ptr->type_->as<IRPointerType>()->base_type;
-            if (remaining_type == nullptr || !remaining_type->is_array()) {
-                throw std::runtime_error("array decay expected array type: " + ast.ident);
-            }
-
-            current_elem_type = remaining_type->as<IRArrayType>()->element_type;
-            auto& ptr = current_ctx_->create_block_value<IRGetElemPtrInst>(
-                current_ptr,
-                get_or_create_constant(0, current_ctx_->module()),
-                get_pointer_type(current_elem_type),
-                current_ctx_->next_percent_name());
-            current_ptr = &ptr;
-        }
-
         return current_ptr;
     }
-
-    if (lval && !ast.indices.empty()) {
-        throw std::runtime_error(ast.ident + " is not array");
-    }
-
     // scalar
     if (!ast.indices.empty()) {
         throw std::runtime_error(ast.ident + " is not array");
@@ -1618,25 +1708,41 @@ IRValue* RewindIRBuilder::lower_lval_address(const LValAST& ast, bool allow_arra
     return var;
 }
 
-IRValue* RewindIRBuilder::lower_call_arg(const ExpAST& ast, const IRType* expected_ty)
+IRValue* RewindIRBuilder::build_array_aggregate_from_flat(const IRArrayType* array_type,
+                                                          const std::vector<int32_t>& flat_values,
+                                                          size_t& cursor,
+                                                          IRModule& module)
 {
-    if (expected_ty->is_pointer()) {
-        if (const auto* lval = try_extract_lvalue(ast)) {
-            auto value = lookup_value(lval->ident);
-            if (value && std::holds_alternative<SymbolTable::Var>(*value)
-                && is_array_storage(std::get<SymbolTable::Var>(*value).alloc)) {
-                return lower_lval_address(*lval, true);
-            }
+    std::vector<IRValue*> elems;
+    elems.reserve(array_type->length);
+
+    if (array_type->element_type->is_array()) {
+        const auto* child_array_type = array_type->element_type->as<IRArrayType>();
+        for (size_t i = 0; i < array_type->length; ++i) {
+            elems.push_back(build_array_aggregate_from_flat(
+                child_array_type,
+                flat_values,
+                cursor,
+                module));
         }
+    } else if (array_type->element_type->is_int32()) {
+        for (size_t i = 0; i < array_type->length; ++i) {
+            const int32_t value = cursor < flat_values.size() ? flat_values[cursor] : 0;
+            elems.push_back(get_or_create_constant(value, module));
+            ++cursor;
+        }
+    } else {
+        throw std::runtime_error("unsupported array element type in aggregate builder");
     }
 
-    return lower_exp(ast);
+    return module.make_value<IRAggregate>(std::move(elems), array_type);
 }
 
-void RewindIRBuilder::processConstArrayInit(const ConstInitValAST& init_val,
-                                            const std::vector<int32_t>& array_dims,
-                                            std::vector<int32_t>& target_buffer,
-                                            size_t current_dim_idx)
+// global const array init
+void RewindIRBuilder::process_const_array_init(const ConstInitValAST& init_val,
+                                               const std::vector<int32_t>& array_dims,
+                                               std::vector<int32_t>& target_buffer,
+                                               size_t current_dim_idx)
 {
     std::visit(
         overloaded{
@@ -1661,7 +1767,7 @@ void RewindIRBuilder::processConstArrayInit(const ConstInitValAST& init_val,
                 for (const auto& init_base : array_init.const_inits) {
                     const auto& nested =
                         expect_node<ConstInitValAST>(*init_base, "ConstInitValAST");
-                    processConstArrayInit(nested, array_dims, target_buffer, next_dim_idx);
+                    process_const_array_init(nested, array_dims, target_buffer, next_dim_idx);
                 }
 
                 while (target_buffer.size() < start_index + total_count) {
@@ -1669,6 +1775,117 @@ void RewindIRBuilder::processConstArrayInit(const ConstInitValAST& init_val,
                 }
             }},
         init_val.payload);
+}
+
+// global array init
+void RewindIRBuilder::process_array_init_const(const InitValAST& init_val,
+                                               const std::vector<int32_t>& array_dims,
+                                               std::vector<int32_t>& target_buffer,
+                                               size_t current_dim_idx)
+{
+    std::visit(
+        overloaded{
+            [&](const InitValAST::ExprInit& expr_init) {
+                const auto& exp = expect_node<ExpAST>(*expr_init.exp, "ExpAST");
+                target_buffer.push_back(eval_exp(exp));
+            },
+            [&](const InitValAST::ArrayInit& array_init) {
+                if (current_dim_idx >= array_dims.size()) {
+                    return;
+                }
+
+                const size_t start_index = target_buffer.size();
+                size_t total_count = 1;
+                for (size_t i = current_dim_idx; i < array_dims.size(); ++i) {
+                    total_count *= static_cast<size_t>(array_dims[i]);
+                }
+
+                const size_t next_dim_idx =
+                    current_dim_idx + 1 < array_dims.size() ? current_dim_idx + 1 : current_dim_idx;
+
+                for (const auto& init_base : array_init.inits) {
+                    const auto& nested = expect_node<InitValAST>(*init_base, "InitValAST");
+                    process_array_init_const(nested, array_dims, target_buffer, next_dim_idx);
+                }
+
+                while (target_buffer.size() < start_index + total_count) {
+                    target_buffer.push_back(0);
+                }
+            }},
+        init_val.payload);
+}
+
+// local array init
+// cooperate local_array_init
+void RewindIRBuilder::process_array_init_runtime(const InitValAST& init_val,
+                                                 const std::vector<int32_t>& array_dims,
+                                                 std::vector<IRValue*>& target_buffer,
+                                                 size_t current_dim_idx)
+{
+    std::visit(
+        overloaded{
+            [&](const InitValAST::ExprInit& expr_init) {
+                const auto& exp = expect_node<ExpAST>(*expr_init.exp, "ExpAST");
+                target_buffer.push_back(lower_exp(exp));
+            },
+            [&](const InitValAST::ArrayInit& array_init) {
+                if (current_dim_idx >= array_dims.size()) {
+                    return;
+                }
+
+                const size_t start_index = target_buffer.size();
+                size_t total_count = 1;
+                for (size_t i = current_dim_idx; i < array_dims.size(); ++i) {
+                    total_count *= static_cast<size_t>(array_dims[i]);
+                }
+
+                const size_t next_dim_idx =
+                    current_dim_idx + 1 < array_dims.size() ? current_dim_idx + 1 : current_dim_idx;
+
+                for (const auto& init_base : array_init.inits) {
+                    const auto& nested = expect_node<InitValAST>(*init_base, "InitValAST");
+                    process_array_init_runtime(nested, array_dims, target_buffer, next_dim_idx);
+                }
+
+                while (target_buffer.size() < start_index + total_count) {
+                    target_buffer.push_back(get_or_create_constant(0, current_ctx_->module()));
+                }
+            }},
+        init_val.payload);
+}
+
+// ? To be optimized
+void RewindIRBuilder::local_array_init(IRValue* alloc,
+                                       const std::vector<int32_t>& array_dims,
+                                       const std::vector<IRValue*>& values)
+{
+    for (size_t flat_index = 0; flat_index < values.size(); ++flat_index) {
+        IRValue* current_ptr = alloc;
+        const IRType* current_elem_type = get_array_type(array_dims, get_i32_type());
+        size_t remainder = flat_index;
+
+        for (size_t dim = 0; dim < array_dims.size(); ++dim) {
+            size_t stride = 1;
+            for (size_t next = dim + 1; next < array_dims.size(); ++next) {
+                stride *= static_cast<size_t>(array_dims[next]);
+            }
+
+            const size_t index_value = stride == 0 ? 0 : remainder / stride;
+            remainder = stride == 0 ? 0 : remainder % stride;
+
+            current_elem_type = current_elem_type->as<IRArrayType>()->element_type;
+            current_ptr = &current_ctx_->create_block_value<IRGetElemPtrInst>(
+                current_ptr,
+                get_or_create_constant(static_cast<int32_t>(index_value), current_ctx_->module()),
+                get_pointer_type(current_elem_type),
+                current_ctx_->next_percent_name());
+        }
+
+        static_cast<void>(current_ctx_->create_block_value<IRStoreInst>(
+            values[flat_index],
+            current_ptr,
+            get_unit_type()));
+    }
 }
 
 int32_t RewindIRBuilder::eval_exp(const ExpAST& ast)

@@ -49,12 +49,28 @@ private:
     IRValue* lower_lval_rvalue(const LValAST& ast);
     IRValue* lower_lval_address(const LValAST& ast, bool allow_array_decay = false);
     IRValue* lower_call_arg(const ExpAST& ast, const IRType* expected_ty);
+    IRValue* lower_lval_array_address(const LValAST& ast, IRValue*, const IRType*, bool allow_array_decay = false);
+    IRValue* lower_lval_pointer_address(const LValAST& ast, IRValue*, const IRType*, bool allow_array_decay = false);
 
-    // eval const value, not return IR
-    void processConstArrayInit(const ConstInitValAST& init_val,
-                               const std::vector<int32_t>& array_dims,
-                               std::vector<int32_t>& target_buffer,
-                               size_t current_dim_idx = 0);
+    IRValue* build_array_aggregate_from_flat(const IRArrayType* array_type,
+                                             const std::vector<int32_t>& flat_values,
+                                             size_t& cursor,
+                                             IRModule& module);
+    void process_array_init_const(const InitValAST& init_val,
+                                  const std::vector<int32_t>& array_dims,
+                                  std::vector<int32_t>& target_buffer,
+                                  size_t current_dim_idx = 0);
+    void process_array_init_runtime(const InitValAST& init_val,
+                                    const std::vector<int32_t>& array_dims,
+                                    std::vector<IRValue*>& target_buffer,
+                                    size_t current_dim_idx = 0);
+    void local_array_init(IRValue* alloc,
+                          const std::vector<int32_t>& array_dims,
+                          const std::vector<IRValue*>& values);
+    void process_const_array_init(const ConstInitValAST& init_val,
+                                  const std::vector<int32_t>& array_dims,
+                                  std::vector<int32_t>& target_buffer,
+                                  size_t current_dim_idx = 0);
     int32_t eval_exp(const ExpAST& ast);
     int32_t eval_lor_exp(const LOrExpAST& ast);
     int32_t eval_land_exp(const LAndExpAST& ast);
@@ -83,8 +99,6 @@ private:
     FuncContext* current_ctx_ = nullptr;
 
     void set_current_ctx(FuncContext* ctx);
-
-    // FuncContext& current_ctx();
 };
 
 } // namespace rewind_ir

@@ -40,7 +40,7 @@ using namespace std;
 %type <ast_val> Decl ConstDecl ConstDef ConstInitVal BlockItem ConstExp VarDecl VarDef InitVal
 %type <ast_val> MatchedStmt UnMatchedStmt FuncFParam FuncRParams LVal DimDecl Index
 %type <ast_list> ConstDefList BlockItemList VarDefList CompUnitItemList FuncFParamList ExpList
-%type <ast_list> DimDeclList ConstInitValList OptIndexList
+%type <ast_list> DimDeclList ConstInitValList InitValList OptIndexList
 %type <int_val> Number
 %type <unary_op> UnaryOp
 %type <binary_op> AddOp MulOp RelOp EqOp
@@ -317,7 +317,7 @@ VarDef
         delete dim_list;
         $$ = ast;
     }
-    | IDENT DimDeclList '=' ConstInitVal {
+    | IDENT DimDeclList '=' InitVal {
         auto ast = new VarDefAST();
         auto* dim_list = $2;
         ast->payload = VarDefAST::InitializedArray {
@@ -332,7 +332,39 @@ VarDef
 
 InitVal
     : Exp {
-        $$ = $1;
+        auto ast = new InitValAST();
+        ast->payload = InitValAST::ExprInit {
+            unique_ptr<BaseAST>($1)
+        };
+        $$ = ast;
+    }
+    | '{' '}' {
+        auto ast = new InitValAST();
+        ast->payload = InitValAST::ArrayInit { {} };
+        $$ = ast;
+    }
+    | '{' InitValList '}' {
+        auto ast = new InitValAST();
+        if ($2 != nullptr) {
+            ast->payload = InitValAST::ArrayInit {
+                std::move(*($2))
+            };
+            delete $2;
+        }
+        $$ = ast;
+    }
+    ;
+
+InitValList
+    : InitVal {
+        auto init_list = new vector<unique_ptr<BaseAST>>();
+        init_list->push_back(unique_ptr<BaseAST>($1));
+        $$ = init_list;
+    }
+    | InitValList ',' InitVal {
+        auto init_list = $1;
+        init_list->push_back(unique_ptr<BaseAST>($3));
+        $$ = init_list;
     }
     ;
 
@@ -710,19 +742,25 @@ PrimaryExp
     ;
 
 LVal
-    : IDENT OptIndexList {
+    : IDENT {
         auto ast = new LValAST();
         ast->ident = *unique_ptr<string>($1);
-        auto* index_list = $2;
-        ast->indices = std::move(*index_list);
-        delete index_list;
+        $$ = ast;
+    }
+    | IDENT OptIndexList {
+        auto ast = new LValAST();
+        ast->ident = *unique_ptr<string>($1);
+        ast->indices = std::move(*$2);
+        delete $2;
         $$ = ast;
     }
     ;
 
 OptIndexList
-    : %empty {
-        $$ = new vector<unique_ptr<BaseAST>>();
+    : Index {
+        auto index_list = new vector<unique_ptr<BaseAST>>();
+        index_list->push_back(unique_ptr<BaseAST>($1));
+        $$ = index_list;
     }
     | OptIndexList Index {
         auto index_list = $1;

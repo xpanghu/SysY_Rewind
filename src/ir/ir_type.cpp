@@ -147,33 +147,4 @@ size_t IRTypeContext::getTypeSize(const IRType* type) const
     return 0;
 }
 
-// ! too many magic number
-size_t IRTypeContext::getTypeAlign(const IRType* type) const
-{
-    if (type == nullptr) {
-        return 4; // default alignment
-    }
-
-    switch (type->tag) {
-    case IRTypeTag::INT32:
-        return 4; // 32-bit aligned
-    case IRTypeTag::UNIT:
-        return 1;
-    case IRTypeTag::POINTER:
-        return 4; // RISC-V 32-bit: pointer aligned
-    case IRTypeTag::ARRAY: {
-        if (type->is_array()) {
-            auto* array_type = type->as<IRArrayType>();
-            return getTypeAlign(array_type);
-        } else {
-            throw std::runtime_error("not ARRAY IR Type");
-        }
-    }
-    case IRTypeTag::FUNCTION:
-        return 4;
-    }
-
-    return 4;
-}
-
 } // namespace rewind_ir

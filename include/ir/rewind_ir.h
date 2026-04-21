@@ -166,6 +166,16 @@ public:
         return kind_ == IRValueKind::FUNC_ARG_REF;
     }
 
+    bool is_get_elem_ptr() const
+    {
+        return kind_ == IRValueKind::IR_GET_ELEM_PTR;
+    }
+
+    bool is_get_ptr() const
+    {
+        return kind_ == IRValueKind::IR_GET_PTR;
+    }
+
 protected:
     IRValue() = default;
 
@@ -321,7 +331,10 @@ public:
 
 private:
     IRStoreInst() = default;
-    explicit IRStoreInst(IRValue* value, IRValue* dest, const IRType* ty, const std::string& name = {}) : IRInstruction(IRValueKind::IR_STORE, ty, name), value_(value), dest_(dest)
+    explicit IRStoreInst(IRValue* value, IRValue* dest, const IRType* ty, const std::string& name = {}) :
+        IRInstruction(IRValueKind::IR_STORE, ty, name),
+        value_(value),
+        dest_(dest)
     {
     }
 };
@@ -340,7 +353,9 @@ public:
 
 private:
     IRLoadInst() = default;
-    explicit IRLoadInst(IRValue* src, const IRType* ty, const std::string& name = {}) : IRInstruction(IRValueKind::IR_LOAD, ty, name), src_(src)
+    explicit IRLoadInst(IRValue* src, const IRType* ty, const std::string& name = {}) :
+        IRInstruction(IRValueKind::IR_LOAD, ty, name),
+        src_(src)
     {
     }
 };
@@ -357,6 +372,7 @@ class IRGetPtrInst : public IRInstruction
 public:
     IRValue* src_;
     IRValue* index_;
+    static int a;
     ~IRGetPtrInst() override = default;
 
 private:

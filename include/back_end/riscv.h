@@ -108,7 +108,13 @@ private:
     void emit_branch(const rewind_ir::IRBranchInst& inst);
     void emit_jump(const rewind_ir::IRJumpInst& inst);
     void emit_return(const rewind_ir::IRReturnInst& inst);
+    void emit_get_ptr(const rewind_ir::IRGetPtrInst& inst);
     void emit_get_elem_ptr(const rewind_ir::IRGetElemPtrInst& inst);
+    void emit_global_initializer(const rewind_ir::IRValue* init, const rewind_ir::IRType* type);
+    void emit_initializer_store(const rewind_ir::IRValue* init,
+                                const rewind_ir::IRType* type,
+                                Register base,
+                                int32_t offset);
 
     /*
      * if you only have a IRValue*, use materialize_value
@@ -126,15 +132,15 @@ private:
     void emit_adjust_sp(int32_t delta);
 
     // Stack access helpers
-    void emit_stack_address(Register rd, int32_t offset, Register scratch = Register::t2);
-    void emit_stack_load(Register rd, int32_t offset, Register scratch = Register::t2);
+    void emit_stack_address(Register rd, int32_t offset);
+    void emit_stack_load(Register rd, int32_t offset);
     void emit_stack_store(Register rs, int32_t offset, Register scratch = Register::t2);
 
     // Raw assembly emission
-    void emit_li(Register rd, int32_t imm);
+    void emit_li(Register rd, int32_t imm); // li rd, imm
     void emit_mv(Register rd, Register rs);
-    void emit_add(Register rd, Register rs1, Register rs2);
-    void emit_addi(Register rd, Register rs1, int32_t imm);
+    void emit_add(Register rd, Register rs1, Register rs2); // add rd, rs1, rs2
+    void emit_addi(Register rd, Register rs1, int32_t imm); // addi rd, rs1, imm12
     void emit_sub(Register rd, Register rs1, Register rs2);
     void emit_mul(Register rd, Register rs1, Register rs2);
     void emit_div(Register rd, Register rs1, Register rs2);
@@ -149,7 +155,7 @@ private:
     void emit_seqz(Register rd, Register rs);
     void emit_snez(Register rd, Register rs);
     void emit_la(Register rd, const std::string& label);
-    void emit_lw(Register rd, Register rs1, int32_t offset);
+    void emit_lw(Register rd, Register rs1, int32_t offset); // lw rs, imm12(rd)
     void emit_sw(Register rs2, Register rs1, int32_t offset);
     void emit_ret();
     void emit_call_label(const std::string& label);
