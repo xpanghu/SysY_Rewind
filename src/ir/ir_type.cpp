@@ -65,25 +65,20 @@ const IRPointerType* IRTypeContext::getPointer(const IRType* base)
     return ptr;
 }
 
-// key = hash(params + ret)，
-// upgrade: key = std::pair<std::vector<const IRType*> params, const IRType* ret>
-// same params and ret will return same IRFunctionType*
 const IRFunctionType* IRTypeContext::getFunction(std::vector<const IRType*> params, const IRType* ret)
 {
     if (ret == nullptr) {
         throw std::runtime_error("function return type cannot be null");
     }
 
-    size_t hash = 0;
-    hash ^= std::hash<size_t>()(reinterpret_cast<size_t>(ret) << 1);
     for (size_t i = 0; i < params.size(); i++) {
         if (params[i] == nullptr) {
             throw std::runtime_error("function parameter type cannot be null");
         }
-        hash ^= std::hash<size_t>()(reinterpret_cast<size_t>(params[i]) << (i + 1));
     }
 
-    auto it = function_types_.find(hash);
+    auto key = std::make_pair(params, ret);
+    auto it = function_types_.find(key);
     if (it != function_types_.end()) {
         return it->second.get();
     }
@@ -91,7 +86,7 @@ const IRFunctionType* IRTypeContext::getFunction(std::vector<const IRType*> para
     auto type = std::make_unique<IRFunctionType>(std::move(params), ret);
 
     auto* ptr = type.get();
-    function_types_[hash] = std::move(type);
+    function_types_[key] = std::move(type);
     return ptr;
 }
 

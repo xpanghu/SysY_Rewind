@@ -205,24 +205,6 @@ public:
     void Dump(std::ostream& out, int indent = 0) const override;
 };
 
-// InitValAST
-class InitValAST : public BaseAST
-{
-public:
-    struct ExprInit {
-        std::unique_ptr<BaseAST> exp;
-    };
-
-    struct ArrayInit {
-        std::vector<std::unique_ptr<BaseAST>> inits; // vector of InitValAST
-    };
-
-    using Payload = std::variant<ExprInit, ArrayInit>;
-    Payload payload;
-
-    void Dump(std::ostream& out, int indent = 0) const override;
-};
-
 // VarDecl
 class VarDeclAST : public BaseAST
 {
@@ -261,6 +243,24 @@ public:
     Payload payload;
 
     void Dump(std::ostream& out, int ident = 0) const override;
+};
+
+// InitValAST
+class InitValAST : public BaseAST
+{
+public:
+    struct ExprInit {
+        std::unique_ptr<BaseAST> exp;
+    };
+
+    struct ArrayInit {
+        std::vector<std::unique_ptr<BaseAST>> inits; // vector of InitValAST
+    };
+
+    using Payload = std::variant<ExprInit, ArrayInit>;
+    Payload payload;
+
+    void Dump(std::ostream& out, int indent = 0) const override;
 };
 
 // StmtAST

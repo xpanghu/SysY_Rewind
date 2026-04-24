@@ -2,6 +2,9 @@ IMAGE = maxxing/compiler-dev
 BUILD_DIR = build
 COMPILER = $(BUILD_DIR)/compiler
 SIMPLE_TEST = ./tests/hello.sysy
+BAREMETAL_RUNNER = ./scripts/run_riscv_baremetal.sh
+INPUT ?= $(SIMPLE_TEST)
+INPUT_DATA ?=
 
 UID := $(shell id -u)
 GID := $(shell id -g)
@@ -20,28 +23,15 @@ build: config
 clean:
 	rm -rf $(BUILD_DIR)
 
-shell:
-	docker run -it --rm \
-			-u $(UID):$(GID) \
-			-v "$(PWD):$(PWD)" \
-			-w "$(PWD)" \
-			$(IMAGE) bash
-
 run-ast:
 	$(COMPILER) -ast $(SIMPLE_TEST) -o ./debug/hello.ast
 run-koopa:
 	$(COMPILER) -koopa $(SIMPLE_TEST) -o ./debug/hello.koopa
 run-riscv:
 	$(COMPILER) -riscv $(SIMPLE_TEST) -o ./debug/hello.asm
-
-#test:
-#python3 scripts/test_runner.py koopa
-#python3 scripts/test_runner.py riscv
-
-docker-build:
-	docker run --rm \
-		-u $(UID):$(GID) \
-		-v "$(PWD):$(PWD)" \
-		-w "$(PWD)" \
-		$(IMAGE) \
-		sh -c "cmake -S . -B $(BUILD_DIR) && cmake --build $(BUILD_DIR) -j12"
+run-riscv-baremetal:
+ifeq ($(strip $(INPUT_DATA)),)
+	$(BAREMETAL_RUNNER) $(INPUT)
+else
+	$(BAREMETAL_RUNNER) $(INPUT) $(INPUT_DATA)
+endif

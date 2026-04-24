@@ -48,6 +48,9 @@ private:
     IRValue* lower_primary_exp(const PrimaryExpAST& ast);
     IRValue* lower_lval_rvalue(const LValAST& ast);
     IRValue* lower_lval_address(const LValAST& ast, bool allow_array_decay = false);
+    IRValue* lower_lval_storage_address(const LValAST& ast,
+                                        bool allow_array_decay,
+                                        bool require_mutable);
     IRValue* lower_call_arg(const ExpAST& ast, const IRType* expected_ty);
     IRValue* lower_lval_array_address(const LValAST& ast, IRValue*, const IRType*, bool allow_array_decay = false);
     IRValue* lower_lval_pointer_address(const LValAST& ast, IRValue*, const IRType*, bool allow_array_decay = false);

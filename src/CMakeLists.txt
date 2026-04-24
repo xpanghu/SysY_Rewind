@@ -49,19 +49,6 @@ add_executable(compiler
     ${GENERATED_SRCS}
 )
 
-# add sysy_runtime library
-#set(SYSY_RUNTIME_LIB ${PROJECT_SOURCE_DIR}/third_party/sysyrt/libsysy.a)
-#if(NOT EXISTS ${SYSY_RUNTIME_LIB})
-#message(FATAL_ERROR "missing SysY runtime library: ${SYSY_RUNTIME_LIB}")
-#endif()
-
-#add_library(sysy_runtime STATIC IMPORTED GLOBAL)
-#set_target_properties(sysy_runtime PROPERTIES
-#IMPORTED_LOCATION ${SYSY_RUNTIME_LIB}
-#)
-
-#target_link_libraries(compiler PRIVATE sysy_runtime)
-
 # 添加所有 include 目录到目标
 target_include_directories(compiler PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/front_end

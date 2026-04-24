@@ -83,10 +83,6 @@ inline bool is_call_arg_type_compatible(const IRType* actual, const IRType* expe
         return true;
     }
 
-    if (actual == nullptr || expected == nullptr) {
-        return false;
-    }
-
     if (!actual->is_pointer() || !expected->is_pointer()) {
         return false;
     }
@@ -98,6 +94,206 @@ inline bool is_call_arg_type_compatible(const IRType* actual, const IRType* expe
 
     const auto* decayed_type = get_pointer_type(actual_base->as<IRArrayType>()->element_type);
     return decayed_type == expected;
+}
+
+enum class InitEvalMode {
+    ConstOnly,
+    RuntimeAllowed,
+};
+
+struct InitTree {
+    struct Scalar {
+        const BaseAST* expr = nullptr;
+    };
+
+    struct List {
+        std::vector<InitTree> children;
+    };
+
+    std::variant<Scalar, List> payload;
+};
+
+template <class... Ts>
+struct overloaded : Ts... {
+    using Ts::operator()...;
+};
+template <class... Ts>
+overloaded(Ts...) -> overloaded<Ts...>;
+
+template <typename T>
+const T& must_node(const BaseAST& node, const char* expected_name)
+{
+    if (const auto* casted = dynamic_cast<const T*>(&node)) {
+        return *casted;
+    }
+    throw std::runtime_error(
+        std::string("AST node kind mismatch, expected ") + expected_name);
+}
+
+InitTree build_init_tree(const ConstInitValAST& ast)
+{
+    return std::visit(
+        overloaded{
+            [&](const ConstInitValAST::ConstExprInit& expr_init) -> InitTree {
+                return InitTree{InitTree::Scalar{expr_init.const_exp.get()}};
+            },
+            [&](const ConstInitValAST::ConstArrayInit& array_init) -> InitTree {
+                InitTree::List list;
+                list.children.reserve(array_init.const_inits.size());
+                for (const auto& item : array_init.const_inits) {
+                    const auto& nested = must_node<ConstInitValAST>(*item, "ConstInitValAST");
+                    list.children.push_back(build_init_tree(nested));
+                }
+                return InitTree{std::move(list)};
+            }},
+        ast.payload);
+}
+
+InitTree build_init_tree(const InitValAST& ast)
+{
+    return std::visit(
+        overloaded{
+            [&](const InitValAST::ExprInit& expr_init) -> InitTree {
+                return InitTree{InitTree::Scalar{expr_init.exp.get()}};
+            },
+            [&](const InitValAST::ArrayInit& array_init) -> InitTree {
+                InitTree::List list;
+                list.children.reserve(array_init.inits.size());
+                for (const auto& item : array_init.inits) {
+                    const auto& nested = must_node<InitValAST>(*item, "InitValAST");
+                    list.children.push_back(build_init_tree(nested));
+                }
+                return InitTree{std::move(list)};
+            }},
+        ast.payload);
+}
+
+size_t total_array_elems(const std::vector<int32_t>& dims)
+{
+    size_t total = 1;
+    for (const auto dim : dims) {
+        total *= static_cast<size_t>(dim);
+    }
+    return total;
+}
+
+template <typename Elem, typename MakeZero>
+void fill_zero_object(const IRType* type,
+                      size_t& cursor,
+                      std::vector<Elem>& out,
+                      InitEvalMode mode,
+                      MakeZero&& make_zero)
+{
+    if (type->is_int32()) {
+        out[cursor++] = make_zero(mode);
+        return;
+    }
+
+    const auto* array_type = type->as<IRArrayType>();
+    for (size_t i = 0; i < array_type->length; ++i) {
+        fill_zero_object(array_type->element_type, cursor, out, mode, make_zero);
+    }
+}
+
+template <typename Elem, typename EvalScalar, typename MakeZero>
+void fill_object_from_sequence(const std::vector<InitTree>& items,
+                               size_t& item_idx,
+                               const IRType* type,
+                               size_t& cursor,
+                               std::vector<Elem>& out,
+                               InitEvalMode mode,
+                               EvalScalar&& eval_scalar,
+                               MakeZero&& make_zero)
+{
+    if (type->is_int32()) {
+        // check if need to fill zero
+        if (item_idx >= items.size()) {
+            fill_zero_object(type, cursor, out, mode, make_zero);
+            return;
+        }
+
+        const auto& item = items[item_idx];
+        if (const auto* scalar = std::get_if<InitTree::Scalar>(&item.payload)) {
+            out[cursor++] = eval_scalar(*scalar->expr, mode);
+            ++item_idx;
+            return;
+        }
+
+        size_t nested_idx = 0;
+        const auto& nested_items = std::get<InitTree::List>(item.payload).children;
+        fill_object_from_sequence(
+            nested_items, nested_idx, type, cursor, out, mode, eval_scalar, make_zero);
+        ++item_idx;
+        return;
+    }
+
+    const auto* array_type = type->as<IRArrayType>();
+    for (size_t i = 0; i < array_type->length; ++i) {
+        if (item_idx >= items.size()) {
+            fill_zero_object(array_type->element_type, cursor, out, mode, make_zero);
+            continue;
+        }
+
+        // array
+        const auto& item = items[item_idx];
+        if (std::holds_alternative<InitTree::List>(item.payload)) {
+            size_t nested_idx = 0;
+            const auto& nested_items = std::get<InitTree::List>(item.payload).children;
+            fill_object_from_sequence(
+                nested_items,
+                nested_idx,
+                array_type->element_type,
+                cursor,
+                out,
+                mode,
+                eval_scalar,
+                make_zero);
+            ++item_idx;
+            continue;
+        }
+
+        // scalar
+        fill_object_from_sequence(
+            items,
+            item_idx,
+            array_type->element_type,
+            cursor,
+            out,
+            mode,
+            eval_scalar,
+            make_zero);
+    }
+}
+
+template <typename Elem, typename EvalScalar, typename MakeZero>
+void flatten_init_tree_impl(const InitTree& init,
+                            const IRType* object_type,
+                            size_t& cursor,
+                            std::vector<Elem>& out,
+                            InitEvalMode mode,
+                            EvalScalar&& eval_scalar,
+                            MakeZero&& make_zero)
+{
+    std::vector<InitTree> items = std::visit(
+        overloaded{
+            [](const InitTree::Scalar& s) -> std::vector<InitTree> {
+                return {InitTree{s}};
+            },
+            [](const InitTree::List& l) -> std::vector<InitTree> {
+                return l.children;
+            }},
+        init.payload);
+
+    size_t item_idx = 0;
+    fill_object_from_sequence(
+        items,
+        item_idx,
+        object_type,
+        cursor,
+        out,
+        mode,
+        eval_scalar,
+        make_zero);
 }
 
 const LValAST* try_extract_lvalue(const BaseAST& node)
@@ -277,14 +473,6 @@ IRFunction* declare_external_function(IRModule& module,
 }
 
 } // namespace
-
-// Overloaded struct defined for use with std::variant
-template <class... Ts>
-struct overloaded : Ts... {
-    using Ts::operator()...;
-};
-template <class... Ts>
-overloaded(Ts...) -> overloaded<Ts...>;
 
 IRModule RewindIRBuilder::build(const BaseAST& ast)
 {
@@ -817,12 +1005,6 @@ void RewindIRBuilder::lower_var_decl(const VarDeclAST& ast)
                         get_pointer_type(array_type),
                         current_ctx_->next_at_name(uninit_array.ident));
                     current_ctx_->symbols().define_var(uninit_array.ident, &alloc);
-
-                    auto* zero_init = current_ctx_->module().make_value<IRZeroInit>(array_type);
-                    static_cast<void>(current_ctx_->create_block_value<IRStoreInst>(
-                        zero_init,
-                        &alloc,
-                        get_unit_type()));
                 },
                 [&](const VarDefAST::InitializedArray& init_array) {
                     // get array dims
@@ -1489,7 +1671,11 @@ IRValue* RewindIRBuilder::lower_call_arg(const ExpAST& ast, const IRType* expect
             return actual;
         }
 
-        // ? don't know what its function
+        // this example:
+        //  void f1(int a[])
+        // f2(int arr[][10]) { f1(arr[3]) }
+        // actual->type_ is *[i32, 10], but expected_ty is *i32
+        // so need the following code to transform *[i32, 10] to *i32
         if (actual->type_->is_pointer()) {
             const auto* actual_base = actual->type_->as<IRPointerType>()->base_type;
             if (actual_base->is_array()) {
@@ -1633,34 +1819,7 @@ IRValue* RewindIRBuilder::lower_lval_rvalue(const LValAST& ast)
             current_ctx_->module());
     }
 
-    auto* var = std::get<SymbolTable::Var>(*lval).alloc;
-
-    // array
-    if (is_array_storage(var)) {
-        if (ast.indices.empty()) {
-            throw std::runtime_error("array value is not supported without index: " + ast.ident);
-        }
-
-        IRValue* current_ptr = var;
-        const IRType* current_elem_type = get_array_storage_type(var);
-
-        if (current_elem_type->is_array()) {
-            current_ptr = lower_lval_array_address(ast, current_ptr, current_elem_type, false);
-        } else if (current_elem_type->is_pointer()) {
-            current_ptr = lower_lval_pointer_address(ast, current_ptr, current_elem_type, false);
-        }
-
-        return &current_ctx_->create_block_value<IRLoadInst>(
-            current_ptr,
-            get_i32_type(),
-            current_ctx_->next_percent_name());
-    }
-
-    if (!ast.indices.empty()) {
-        throw std::runtime_error(ast.ident + " is not array");
-    }
-
-    // scalar
+    auto* var = lower_lval_storage_address(ast, false, false);
     return &current_ctx_->create_block_value<IRLoadInst>(
         var,
         get_i32_type(),
@@ -1668,6 +1827,13 @@ IRValue* RewindIRBuilder::lower_lval_rvalue(const LValAST& ast)
 }
 
 IRValue* RewindIRBuilder::lower_lval_address(const LValAST& ast, bool allow_array_decay)
+{
+    return lower_lval_storage_address(ast, allow_array_decay, true);
+}
+
+IRValue* RewindIRBuilder::lower_lval_storage_address(const LValAST& ast,
+                                                     bool allow_array_decay,
+                                                     bool require_mutable)
 {
     // check if value can be modified
     auto lval = lookup_value(ast.ident);
@@ -1681,7 +1847,7 @@ IRValue* RewindIRBuilder::lower_lval_address(const LValAST& ast, bool allow_arra
     }
 
     const auto& var_info = std::get<SymbolTable::Var>(*lval);
-    if (var_info.is_const) {
+    if (require_mutable && var_info.is_const) {
         throw std::runtime_error(ast.ident + " is const");
     }
 
@@ -1700,12 +1866,63 @@ IRValue* RewindIRBuilder::lower_lval_address(const LValAST& ast, bool allow_arra
         }
         return current_ptr;
     }
+
     // scalar
     if (!ast.indices.empty()) {
         throw std::runtime_error(ast.ident + " is not array");
     }
 
     return var;
+}
+
+void RewindIRBuilder::process_const_array_init(const ConstInitValAST& init_val,
+                                               const std::vector<int32_t>& array_dims,
+                                               std::vector<int32_t>& target_buffer,
+                                               size_t current_dim_idx)
+{
+    target_buffer.assign(total_array_elems(array_dims), 0);
+    size_t cursor = 0;
+    auto tree = build_init_tree(init_val);
+
+    // Calculate the array type from dimensions
+    const IRType* object_type = get_array_type(array_dims, get_i32_type());
+
+    flatten_init_tree_impl<int32_t>(
+        tree,
+        object_type,
+        cursor,
+        target_buffer,
+        InitEvalMode::ConstOnly,
+        [&](const BaseAST& expr_ast, InitEvalMode) {
+            const auto& exp = expect_node<ExpAST>(expr_ast, "ExpAST");
+            return eval_exp(exp);
+        },
+        [&](InitEvalMode) { return 0; });
+}
+
+void RewindIRBuilder::process_array_init_const(const InitValAST& init_val,
+                                               const std::vector<int32_t>& array_dims,
+                                               std::vector<int32_t>& target_buffer,
+                                               size_t current_dim_idx)
+{
+    target_buffer.assign(total_array_elems(array_dims), 0);
+    size_t cursor = 0;
+    auto tree = build_init_tree(init_val);
+
+    // Calculate the array type from dimensions
+    const IRType* object_type = get_array_type(array_dims, get_i32_type());
+
+    flatten_init_tree_impl<int32_t>(
+        tree,
+        object_type,
+        cursor,
+        target_buffer,
+        InitEvalMode::ConstOnly,
+        [&](const BaseAST& expr_ast, InitEvalMode) {
+            const auto& exp = expect_node<ExpAST>(expr_ast, "ExpAST");
+            return eval_exp(exp);
+        },
+        [&](InitEvalMode) { return 0; });
 }
 
 IRValue* RewindIRBuilder::build_array_aggregate_from_flat(const IRArrayType* array_type,
@@ -1738,83 +1955,6 @@ IRValue* RewindIRBuilder::build_array_aggregate_from_flat(const IRArrayType* arr
     return module.make_value<IRAggregate>(std::move(elems), array_type);
 }
 
-// global const array init
-void RewindIRBuilder::process_const_array_init(const ConstInitValAST& init_val,
-                                               const std::vector<int32_t>& array_dims,
-                                               std::vector<int32_t>& target_buffer,
-                                               size_t current_dim_idx)
-{
-    std::visit(
-        overloaded{
-            [&](const ConstInitValAST::ConstExprInit& expr_init) {
-                const auto& exp = expect_node<ExpAST>(*expr_init.const_exp, "ExpAST");
-                target_buffer.push_back(eval_exp(exp));
-            },
-            [&](const ConstInitValAST::ConstArrayInit& array_init) {
-                if (current_dim_idx >= array_dims.size()) {
-                    return;
-                }
-
-                const size_t start_index = target_buffer.size();
-                size_t total_count = 1;
-                for (size_t i = current_dim_idx; i < array_dims.size(); ++i) {
-                    total_count *= static_cast<size_t>(array_dims[i]);
-                }
-
-                const size_t next_dim_idx =
-                    current_dim_idx + 1 < array_dims.size() ? current_dim_idx + 1 : current_dim_idx;
-
-                for (const auto& init_base : array_init.const_inits) {
-                    const auto& nested =
-                        expect_node<ConstInitValAST>(*init_base, "ConstInitValAST");
-                    process_const_array_init(nested, array_dims, target_buffer, next_dim_idx);
-                }
-
-                while (target_buffer.size() < start_index + total_count) {
-                    target_buffer.push_back(0);
-                }
-            }},
-        init_val.payload);
-}
-
-// global array init
-void RewindIRBuilder::process_array_init_const(const InitValAST& init_val,
-                                               const std::vector<int32_t>& array_dims,
-                                               std::vector<int32_t>& target_buffer,
-                                               size_t current_dim_idx)
-{
-    std::visit(
-        overloaded{
-            [&](const InitValAST::ExprInit& expr_init) {
-                const auto& exp = expect_node<ExpAST>(*expr_init.exp, "ExpAST");
-                target_buffer.push_back(eval_exp(exp));
-            },
-            [&](const InitValAST::ArrayInit& array_init) {
-                if (current_dim_idx >= array_dims.size()) {
-                    return;
-                }
-
-                const size_t start_index = target_buffer.size();
-                size_t total_count = 1;
-                for (size_t i = current_dim_idx; i < array_dims.size(); ++i) {
-                    total_count *= static_cast<size_t>(array_dims[i]);
-                }
-
-                const size_t next_dim_idx =
-                    current_dim_idx + 1 < array_dims.size() ? current_dim_idx + 1 : current_dim_idx;
-
-                for (const auto& init_base : array_init.inits) {
-                    const auto& nested = expect_node<InitValAST>(*init_base, "InitValAST");
-                    process_array_init_const(nested, array_dims, target_buffer, next_dim_idx);
-                }
-
-                while (target_buffer.size() < start_index + total_count) {
-                    target_buffer.push_back(0);
-                }
-            }},
-        init_val.payload);
-}
-
 // local array init
 // cooperate local_array_init
 void RewindIRBuilder::process_array_init_runtime(const InitValAST& init_val,
@@ -1822,43 +1962,43 @@ void RewindIRBuilder::process_array_init_runtime(const InitValAST& init_val,
                                                  std::vector<IRValue*>& target_buffer,
                                                  size_t current_dim_idx)
 {
-    std::visit(
-        overloaded{
-            [&](const InitValAST::ExprInit& expr_init) {
-                const auto& exp = expect_node<ExpAST>(*expr_init.exp, "ExpAST");
-                target_buffer.push_back(lower_exp(exp));
-            },
-            [&](const InitValAST::ArrayInit& array_init) {
-                if (current_dim_idx >= array_dims.size()) {
-                    return;
-                }
+    target_buffer.assign(
+        total_array_elems(array_dims),
+        get_or_create_constant(0, current_ctx_->module()));
+    size_t cursor = 0;
+    auto tree = build_init_tree(init_val);
 
-                const size_t start_index = target_buffer.size();
-                size_t total_count = 1;
-                for (size_t i = current_dim_idx; i < array_dims.size(); ++i) {
-                    total_count *= static_cast<size_t>(array_dims[i]);
-                }
+    // Calculate the array type from dimensions
+    const IRType* object_type = get_array_type(array_dims, get_i32_type());
 
-                const size_t next_dim_idx =
-                    current_dim_idx + 1 < array_dims.size() ? current_dim_idx + 1 : current_dim_idx;
-
-                for (const auto& init_base : array_init.inits) {
-                    const auto& nested = expect_node<InitValAST>(*init_base, "InitValAST");
-                    process_array_init_runtime(nested, array_dims, target_buffer, next_dim_idx);
-                }
-
-                while (target_buffer.size() < start_index + total_count) {
-                    target_buffer.push_back(get_or_create_constant(0, current_ctx_->module()));
-                }
-            }},
-        init_val.payload);
+    flatten_init_tree_impl<IRValue*>(
+        tree,
+        object_type,
+        cursor,
+        target_buffer,
+        InitEvalMode::RuntimeAllowed,
+        [&](const BaseAST& expr_ast, InitEvalMode) {
+            const auto& exp = expect_node<ExpAST>(expr_ast, "ExpAST");
+            return lower_exp(exp);
+        },
+        [&](InitEvalMode) {
+            return get_or_create_constant(0, current_ctx_->module());
+        });
 }
 
-// ? To be optimized
 void RewindIRBuilder::local_array_init(IRValue* alloc,
                                        const std::vector<int32_t>& array_dims,
                                        const std::vector<IRValue*>& values)
 {
+    size_t total_count = 1;
+    for (const auto dim : array_dims) {
+        total_count *= static_cast<size_t>(dim);
+    }
+
+    if (values.size() > total_count) {
+        throw std::runtime_error(alloc->name_ + " local_array_init: initializer size mismatch");
+    }
+
     for (size_t flat_index = 0; flat_index < values.size(); ++flat_index) {
         IRValue* current_ptr = alloc;
         const IRType* current_elem_type = get_array_type(array_dims, get_i32_type());
@@ -2108,9 +2248,4 @@ void RewindIRBuilder::set_current_ctx(FuncContext* ctx)
 {
     current_ctx_ = ctx;
 }
-
-// FuncContext& RewindIRBuilder::current_ctx()
-//{
-// return *current_ctx_;
-//}
 } // namespace rewind_ir

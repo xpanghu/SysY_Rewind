@@ -1,6 +1,1 @@
-# 基于北大编译实践完成的compiler
-
-## 基本结构
-
-## 已完成内容
-
+# sysy compiler

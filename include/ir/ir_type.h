@@ -158,10 +158,9 @@ private:
     IRInt32Type int32_type_;
     IRUnitType unit_type_;
 
-    // ? consider use unordered_map to replace map
     std::map<std::pair<const IRType*, size_t>, std::unique_ptr<IRArrayType>> array_types_;
     std::map<const IRType*, std::unique_ptr<IRPointerType>> pointer_types_;
-    std::map<size_t, std::unique_ptr<IRFunctionType>> function_types_;
+    std::map<std::pair<std::vector<const IRType*>, const IRType*>, std::unique_ptr<IRFunctionType>> function_types_;
 };
 
 } // namespace rewind_ir
