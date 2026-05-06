@@ -10,28 +10,6 @@
 #include <vector>
 #include <stdexcept>
 
-// AST 相关类（前向声明）
-class BaseAST;
-class CompUnitAST;
-class FuncDefAST;
-class FuncTypeAST;
-class BlockAST;
-class StmtAST;
-class ExpAST;
-class LOrExpAST;
-class LAndExpAST;
-class EqExpAST;
-class RelExpAST;
-class AddExpAST;
-class MulExpAST;
-class UnaryExpAST;
-class PrimaryExpAST;
-class DeclAST;
-class ConstDeclAST;
-class ConstDefAST;
-class ConstInitValAST;
-class LValAST;
-
 namespace rewind_ir
 {
 

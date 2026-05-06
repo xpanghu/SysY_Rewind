@@ -26,12 +26,20 @@ set(FRONTEND_SRCS
 set(IR_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/ir/symbol_table.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ir/ir_builder.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ir/ir_builder_const_eval.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ir/ir_builder_init.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ir/ir_builder_runtime.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ir/ir_type.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ir/ir_text_gen.cpp
 )
 
 set(BACKEND_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/back_end/riscv.cpp
+)
+
+set(DRIVER_SRCS
+    ${CMAKE_CURRENT_SOURCE_DIR}/driver/options.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/driver/pipeline.cpp
 )
 
 # 添加编译生成的文件到源文件列表
@@ -46,6 +54,7 @@ add_executable(compiler
     ${FRONTEND_SRCS}
     ${IR_SRCS}
     ${BACKEND_SRCS}
+    ${DRIVER_SRCS}
     ${GENERATED_SRCS}
 )
 
@@ -54,6 +63,7 @@ target_include_directories(compiler PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/front_end
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/ir
     ${CMAKE_CURRENT_SOURCE_DIR}/../include/back_end
+    ${CMAKE_CURRENT_SOURCE_DIR}/../include/driver
     ${CMAKE_CURRENT_BINARY_DIR}/front_end
 )
 

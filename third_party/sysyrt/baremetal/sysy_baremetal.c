@@ -5,8 +5,9 @@
 #define UART_THR 0x00u
 #define UART_LSR 0x05u
 
-#define UART_LSR_DR   0x01u
+#define UART_LSR_DR 0x01u
 #define UART_LSR_THRE 0x20u
+#define ASCII_EOT 0x04u
 
 #define TEST_FINISHER_BASE 0x00100000u
 #define FINISHER_PASS 0x5555u
@@ -50,7 +51,8 @@ int getch(void)
         last_char_valid = 0;
         return last_char;
     }
-    return uart_getc();
+    int c = uart_getc();
+    return c == ASCII_EOT ? -1 : c;
 }
 
 int getint(void)
@@ -126,42 +128,14 @@ void putarray(int n, int a[])
     putch('\n');
 }
 
-#define CLINT_BASE   0x02000000u
-#define MTIME_ADDR   (CLINT_BASE + 0xBFF8u)
-
-static uint64_t read_mtime(void)
-{
-    volatile uint32_t *low  = (volatile uint32_t *)(MTIME_ADDR);
-    volatile uint32_t *high = (volatile uint32_t *)(MTIME_ADDR + 4);
-    uint32_t lo, hi;
-
-    do {
-        hi = *high;
-        lo = *low;
-    } while (hi != *high);
-
-    return ((uint64_t)hi << 32) | lo;
-}
-
-static uint64_t timer_start = 0;
-
 void starttime(void)
 {
-    timer_start = read_mtime();
+    return;
 }
 
 void stoptime(void)
 {
-    uint64_t end = read_mtime();
-    uint64_t diff = end - timer_start;
-
-    // QEMU virt mtime freq = 10 MHz, diff / 10 = microseconds
-    uint64_t us = diff / 10;
-
-    putch(35);  // '#'
-    putch(32);  // ' '
-    putint((int)(us & 0x7FFFFFFF));
-    putch('\n');
+    return;
 }
 
 void sysy_shutdown(int code)

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "ast.h"
+#include <cstdint>
 #include <optional>
 #include <string>
 #include <unordered_map>

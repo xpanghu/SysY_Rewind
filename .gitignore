@@ -1,7 +1,12 @@
 .vscode/
 build/
 debug/
+tmp/
+riscv32-baremetal/
 tests/
 .clangd
 maze.png
 baremetal_riscv_usage.md
+docs/*
+!docs/architecture/
+!docs/architecture/**

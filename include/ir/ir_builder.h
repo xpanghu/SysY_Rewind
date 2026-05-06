@@ -1,16 +1,41 @@
 #pragma once
 
-#include "ast.h"
 #include "func_context.h"
 #include "rewind_ir.h"
 #include "ir_type.h"
 #include "symbol_table.h"
+#include <cstddef>
+#include <cstdint>
 #include <iosfwd>
 #include <optional>
 #include <string_view>
 #include <string>
 #include <unordered_map>
 #include <variant>
+#include <vector>
+
+class BaseAST;
+class CompUnitAST;
+class FuncDefAST;
+class FuncFParamAST;
+class BlockAST;
+class StmtAST;
+class ExpAST;
+class LOrExpAST;
+class LAndExpAST;
+class EqExpAST;
+class RelExpAST;
+class AddExpAST;
+class MulExpAST;
+class UnaryExpAST;
+class PrimaryExpAST;
+class DeclAST;
+class ConstDeclAST;
+class ConstDefAST;
+class ConstInitValAST;
+class InitValAST;
+class VarDeclAST;
+class LValAST;
 
 namespace rewind_ir
 {
@@ -75,14 +100,6 @@ private:
                                   std::vector<int32_t>& target_buffer,
                                   size_t current_dim_idx = 0);
     int32_t eval_exp(const ExpAST& ast);
-    int32_t eval_lor_exp(const LOrExpAST& ast);
-    int32_t eval_land_exp(const LAndExpAST& ast);
-    int32_t eval_eq_exp(const EqExpAST& ast);
-    int32_t eval_rel_exp(const RelExpAST& ast);
-    int32_t eval_add_exp(const AddExpAST& ast);
-    int32_t eval_mul_exp(const MulExpAST& ast);
-    int32_t eval_unary_exp(const UnaryExpAST& ast);
-    int32_t eval_primary_exp(const PrimaryExpAST& ast);
 
     // if constant exists, will Reuse previous constant
     IRValue* get_or_create_constant(int32_t value, IRModule& module);
