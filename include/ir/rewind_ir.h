@@ -3,12 +3,10 @@
 #include "ir_type.h"
 #include <cassert>
 #include <memory>
-#include <ratio>
 #include <string>
 #include <type_traits>
 #include <utility>
 #include <vector>
-#include <stdexcept>
 
 namespace rewind_ir
 {

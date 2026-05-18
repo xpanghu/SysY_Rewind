@@ -33,7 +33,7 @@ UID := $(shell id -u)
 GID := $(shell id -g)
 PWD := $(shell pwd)
 
-.PHONY: all config build clean clean-riscv run-ast run-koopa run-riscv sysyrt riscv-asm riscv-elf run-riscv-baremetal
+.PHONY: all config build clean clean-riscv run-ast run-koopa run-riscv sysyrt riscv-asm riscv-elf run-riscv-baremetal regression-smoke
 
 all: build
 
@@ -97,3 +97,6 @@ ifeq ($(strip $(INPUT_DATA)),)
 else
 	{ cat $(INPUT_DATA); printf '\004'; } | $(QEMU) $(QEMU_FLAGS) $(RISCV_ELF)
 endif
+
+regression-smoke:
+	./scripts/run_regression_smoke.sh

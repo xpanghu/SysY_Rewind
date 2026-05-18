@@ -31,7 +31,7 @@
 | integer literal and scalar expression | verified | verified | verified | verified | AST expression -> IR value -> backend arithmetic | lv1-lv4, lvX arithmetic cases |
 | unary `+ - !` and chained unary | verified | verified | verified | verified | expression lowering and const eval must stay consistent | focused tests for `!!x`, `- -1` |
 | binary arithmetic and comparison | verified | verified | verified | verified | `BinaryOp` mapping, const eval, `IRBinaryInst`, backend emitter | lvX arithmetic/comparison cases |
-| logical `&& ||` | verified | verified | verified | verified | parser expression tree, short-circuit lowering, block control flow | lvX short-circuit cases |
+| logical && ||  | verified | verified | verified | verified | parser expression tree, short-circuit lowering, block control flow | lvX short-circuit cases |
 | local scalar variable | verified | verified | verified | verified | symbol table, `alloc/store/load`, stack frame slot | lv8/lvX scalar cases |
 | local scalar const | verified | verified | n/a | n/a | const symbol lookup and `eval_*`; no runtime storage needed | const expression cases |
 | global scalar variable | verified | verified | verified | verified | module symbol, `IRGlobalAllocInst`, global data emission | lv8/lv9 globals |

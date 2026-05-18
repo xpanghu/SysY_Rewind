@@ -1,6 +1,5 @@
 #include "ir_type.h"
 #include <cstddef>
-#include <functional>
 #include <stdexcept>
 
 namespace rewind_ir

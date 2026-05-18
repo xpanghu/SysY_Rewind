@@ -8,5 +8,8 @@ tests/
 maze.png
 baremetal_riscv_usage.md
 docs/*
+!docs/README.md
 !docs/architecture/
 !docs/architecture/**
+!docs/project/
+!docs/project/**

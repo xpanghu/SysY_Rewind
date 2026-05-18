@@ -2,7 +2,6 @@
 #include "rewind_ir.h"
 #include <cstdint>
 #include <stdexcept>
-#include <variant>
 
 namespace rewind_ir
 {

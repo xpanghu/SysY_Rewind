@@ -21,10 +21,10 @@ enum class BinaryOp {
     SUB,
     EQ,
     NEQ,
-    LT, // 小于
-    GT, // 大于
-    LE, // 小于等于
-    GE, // 大于等于
+    LT, // <
+    GT, // >
+    LE, //<=
+    GE, //>=
     LAND,
     LOR
 };
@@ -317,7 +317,7 @@ public:
     void Dump(std::ostream& out, int indent = 0) const override;
 };
 
-// LOrExpAST - 使用 variant 替代 epk 字段
+// LOrExpAST 
 class LOrExpAST : public BaseAST
 {
 public:
@@ -336,7 +336,7 @@ public:
     void Dump(std::ostream& out, int indent = 0) const override;
 };
 
-// LAndExpAST - 使用 variant 替代 epk 字段
+// LAndExpAST 
 class LAndExpAST : public BaseAST
 {
 public:
@@ -355,7 +355,7 @@ public:
     void Dump(std::ostream& out, int indent = 0) const override;
 };
 
-// EqExpAST - 使用 variant 替代 epk 字段
+// EqExpAST 
 class EqExpAST : public BaseAST
 {
 public:
@@ -374,7 +374,7 @@ public:
     void Dump(std::ostream& out, int indent = 0) const override;
 };
 
-// RelExpAST - 使用 variant 替代 epk 字段
+// RelExpAST
 class RelExpAST : public BaseAST
 {
 public:
@@ -393,7 +393,7 @@ public:
     void Dump(std::ostream& out, int indent = 0) const override;
 };
 
-// AddExpAST - 使用 variant 替代 epk 字段
+// AddExpAST 
 class AddExpAST : public BaseAST
 {
 public:
@@ -412,7 +412,7 @@ public:
     void Dump(std::ostream& out, int indent = 0) const override;
 };
 
-// MulExpAST - 使用 variant 替代 epk 字段
+// MulExpAST
 class MulExpAST : public BaseAST
 {
 public:

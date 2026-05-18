@@ -11,6 +11,36 @@
 5. 语义分析、常量求值、数组初始化、控制流 lowering 可以共享上下文，但不应全部堆在一个大类里。
 6. 每次重构都要保留 `-ast`、`-koopa`、`-riscv` 的最小验证路径。
 
+## 推荐推进顺序
+
+近期建议按这个顺序推进。已完成项用 `[x]` 标记，未完成项用 `[ ]` 标记：
+
+1. [x] A1 头文件解耦。
+2. [x] A2 Driver 独立化。
+3. [x] A0.2 重构支持边界表。
+4. [x] A5.1 RuntimeDecls 拆分。
+5. [x] A5.2 ConstEvaluator 拆分。
+6. [x] A7.1 AsmWriter 拆分。
+7. [x] A7.2 FrameLayout 拆分。
+8. [x] A7.3 CallingConvention 拆分。
+9. [x] A7.4 target DataLayout 拆分。
+10. [x] A7.5 后端支持表。
+11. [x] A5.3 数组初始化 helper 拆分。
+12. [x] A5.4 表达式 lowering 拆分。
+13. [x] A5.5 语句和控制流 lowering 拆分。
+14. [x] A9 测试和回归保护。
+
+这个顺序先处理低风险、高收益的边界问题，再进入 lowering 和后端中更容易牵动行为的拆分。
+
+主线重构稳定后，下一阶段建议按这个顺序推进：
+
+1. [ ] A10 IR Verifier 和 Pass Manager。
+2. [ ] A11 SSA 和 mem2reg。
+3. [ ] A12 基础 IR 优化 Pass。
+4. [ ] A13 RISC-V 寄存器分配优化。
+
+说明：`-koopa` 是当前自定义 IR 文本形式的输出入口，名称来自早期实践和历史命名，不再把它视为一个需要单独辨析“自定义 IR 文本”或“Koopa 兼容文本”的任务。MLIR bridge 暂不放入本项目任务路线；如果后续要做，更适合作为新的 AI compiler 项目单独设计。
+
 ## 建议目标结构
 
 这是长期目标结构，不要求一次完成。
@@ -70,6 +100,11 @@ src/
 - 2026-05-03: 完成 A5.1 第一阶段。SysY runtime 声明从 `src/ir/ir_builder.cpp` 拆到 `src/ir/ir_builder_runtime.cpp`，`RewindIRBuilder::declare_library_function` 只保留兼容入口。
 - 2026-05-03: 完成 A5.2 第一阶段。常量求值主体从 `src/ir/ir_builder.cpp` 拆到 `src/ir/ir_builder_const_eval.cpp` 的 `ConstEvaluator`，`RewindIRBuilder::eval_exp` 作为现有 lowering 调用点的兼容入口。
 - 2026-05-06: 补充主线重构之后的能力建设路线：A10 IR Verifier 和 Pass Manager、A11 SSA 和 mem2reg、A12 基础 IR 优化 Pass、A13 RISC-V 寄存器分配优化。A10-A13 当前只作为长期路线合并记录，后续每项都应拆成独立任务文档；MLIR bridge 不放入当前项目路线。
+- 2026-05-18: 完成 A7.1。新增 `AsmWriter`，将 RISC-V 原始汇编文本输出从 `riscv.cpp` 中拆出，`IREmitter` 保留 IR 指令调度和后端遍历职责。
+- 2026-05-18: 调整任务文档结构。将推荐推进顺序移到文档开头并标记完成状态；移除“IR 文本输出整理”独立任务，明确 `-koopa` 当前就是自定义 IR 文本输出入口。
+- 2026-05-18: 完成 A7.2-A7.5 第一阶段。新增 `FrameLayout`、`CallingConvention`、`DataLayout` 和 `docs/architecture/riscv_backend_support.md`，将栈帧布局、调用约定、目标数据大小和后端支持边界从 `riscv.cpp` 中拆出。
+- 2026-05-18: 完成 A5.3-A5.5 第一阶段。数组初始化逻辑保留在 `src/ir/ir_builder_init.cpp`，表达式/lvalue/call lowering 移动到 `src/ir/ir_builder_expr.cpp`，语句和控制流 lowering 移动到 `src/ir/ir_builder_stmt.cpp`，共享 helper 收敛到 `src/ir/ir_builder_internal.h`。
+- 2026-05-18: 完成 A9 第一阶段。新增 `scripts/run_regression_smoke.sh` 和 `make regression-smoke`，提供本地构建、hello 的 `-koopa/-riscv`、awesome-sysy `lisp.c` 的 RISC-V 生成，以及可选 Docker lv9 autotest 入口。
 
 ## 模块交互
 
@@ -82,7 +117,7 @@ Driver
   -> optional IRVerifier
   -> mode dispatch:
        -ast   -> ASTPrinter
-       -koopa -> IRTextPrinter
+       -koopa -> 自定义 IR 文本输出
        -riscv -> RiscvBackend
 ```
 
@@ -208,29 +243,14 @@ Driver
 
 - A5.1 先抽 `RuntimeDecls`，因为它最独立。状态：第一阶段已完成，当前落在 `src/ir/ir_builder_runtime.cpp`。
 - A5.2 抽 `ConstEvaluator`，让常量求值从 `RewindIRBuilder` 中分离。状态：第一阶段已完成，当前落在 `src/ir/ir_builder_const_eval.cpp`。
-- A5.3 抽数组初始化 helper。
-- A5.4 抽表达式 lowering。
-- A5.5 抽语句和控制流 lowering。
+- A5.3 抽数组初始化 helper。状态：第一阶段已完成，当前落在 `src/ir/ir_builder_init.cpp`。
+- A5.4 抽表达式 lowering。状态：第一阶段已完成，当前落在 `src/ir/ir_builder_expr.cpp`。
+- A5.5 抽语句和控制流 lowering。状态：第一阶段已完成，当前落在 `src/ir/ir_builder_stmt.cpp`。
 
 验收：
 
 - 每一步拆分后生成的 IR 文本保持一致。
 - 发生语义错误时能定位到负责模块。
-
-### A6 IR 文本输出整理
-
-目标：明确 `-koopa` 实际输出的是当前自定义 IR 的文本形式，还是 Koopa 兼容文本。
-
-小任务：
-
-- A6.1 确认 `IRTextGen` 输出格式目标。
-- A6.2 根据目标命名为 `IRTextPrinter` 或 `KoopaTextPrinter`。
-- A6.3 把错误处理从写注释到输出文件改为诊断返回。
-
-验收：
-
-- 输出格式有明确文档。
-- 失败时不污染目标输出文件。
 
 ### A7 RISC-V 后端拆分
 
@@ -247,11 +267,11 @@ Driver
 
 小任务：
 
-- A7.1 先抽 `AsmWriter`，因为它基本不改变行为。
-- A7.2 再抽 `FrameLayout`。
-- A7.3 抽 `CallingConvention`。
-- A7.4 抽 target `DataLayout`，替代直接使用 `IRTypeContext` 的大小和对齐。
-- A7.5 给每类 IR 指令建立后端支持表。
+- A7.1 先抽 `AsmWriter`，因为它基本不改变行为。状态：已完成，当前落在 `include/back_end/asm_writer.h` 和 `src/back_end/asm_writer.cpp`。
+- A7.2 再抽 `FrameLayout`。状态：第一阶段已完成，当前落在 `include/back_end/frame_layout.h` 和 `src/back_end/frame_layout.cpp`。
+- A7.3 抽 `CallingConvention`。状态：第一阶段已完成，当前落在 `include/back_end/calling_convention.h` 和 `src/back_end/calling_convention.cpp`。
+- A7.4 抽 target `DataLayout`，替代直接使用 `IRTypeContext` 的大小和对齐。状态：第一阶段已完成，当前落在 `include/back_end/data_layout.h` 和 `src/back_end/data_layout.cpp`。
+- A7.5 给每类 IR 指令建立后端支持表。状态：第一阶段已完成，见 `docs/architecture/riscv_backend_support.md`。
 
 验收：
 
@@ -284,10 +304,10 @@ Driver
 
 小任务：
 
-- A9.1 建立小型 golden tests：AST、IR text、RISC-V asm。
-- A9.2 建立 baremetal smoke tests。
-- A9.3 为曾经修过的问题加入用例：`!=`、`!!x`、`- -1`、大栈帧、数组初始化、函数调用。
-- A9.4 区分 baseline breakage 和当前任务引入的问题。
+- A9.1 建立小型 golden tests：AST、IR text、RISC-V asm。状态：第一阶段已完成，当前提供 `make regression-smoke` 的本地 smoke 输出入口。
+- A9.2 建立 baremetal smoke tests。状态：已有 `make run-riscv-baremetal`，本轮未改变。
+- A9.3 为曾经修过的问题加入用例：`!=`、`!!x`、`- -1`、大栈帧、数组初始化、函数调用。状态：第一阶段先保留在支持矩阵和 smoke 脚本中，后续可继续升级为 golden 文件对比。
+- A9.4 区分 baseline breakage 和当前任务引入的问题。状态：第一阶段通过 `scripts/run_regression_smoke.sh` 固定最小本地验证链路；Docker autotest 通过 `RUN_DOCKER_AUTOTEST=1` 显式打开。
 
 验收：
 
@@ -370,25 +390,3 @@ Driver
 - 现有测试仍通过。
 - 典型标量程序的汇编中无意义栈读写明显减少。
 - 寄存器分配失败时能安全 fallback，而不是生成错误汇编。
-
-## 推荐推进顺序
-
-近期建议按这个顺序开始：
-
-1. A1 头文件解耦。
-2. A2 Driver 独立化。
-3. A0.2 重构支持边界表。
-4. A5.1 RuntimeDecls 拆分。
-5. A5.2 ConstEvaluator 拆分。
-6. A7.1 AsmWriter 拆分。
-
-这个顺序先处理低风险、高收益的边界问题，再进入较大的 lowering 和后端拆分。
-
-重构主线稳定后，下一阶段建议按这个顺序推进：
-
-1. A10 IR Verifier 和 Pass Manager。
-2. A11 SSA 和 mem2reg。
-3. A12 基础 IR 优化 Pass。
-4. A13 RISC-V 寄存器分配优化。
-
-MLIR bridge 暂不放入本项目任务路线。如果后续要做，可以作为新的 AI compiler 项目单独设计，而不是混入当前 SysY 编译器主线。

@@ -27,13 +27,19 @@ set(IR_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/ir/symbol_table.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ir/ir_builder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ir/ir_builder_const_eval.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ir/ir_builder_expr.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ir/ir_builder_init.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ir/ir_builder_runtime.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ir/ir_builder_stmt.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ir/ir_type.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ir/ir_text_gen.cpp
 )
 
 set(BACKEND_SRCS
+    ${CMAKE_CURRENT_SOURCE_DIR}/back_end/asm_writer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/back_end/calling_convention.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/back_end/data_layout.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/back_end/frame_layout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/back_end/riscv.cpp
 )
 

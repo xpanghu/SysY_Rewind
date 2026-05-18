@@ -4,9 +4,13 @@
 
 目标不是一次性重写整个编译器，而是先把当前链路读清楚，再把前端、中间 IR、后端、驱动和运行时脚本的职责边界固定下来。之后每次只选择一个小任务推进，确保编译链始终可验证。
 
+如果目标是面试前快速掌握项目结构，建议先阅读 `../project/`。这个目录更关注长期重构记录和任务推进。
+
 ## 文档索引
 
 - `current_pipeline.md`: 当前代码链路、模块职责和已发现的耦合点。
+- `module_flow.md`: 当前编译链路的两段式 Mermaid 模块图，分别描述输入到 AST、AST 到 IR/RISC-V 的数据流。
+- `riscv_backend_support.md`: RISC-V 后端组件边界、IR 指令支持表和后端重构时的最小验证方式。
 - `support_matrix.md`: 当前语法能力跨 parser/AST、lowering、IR text、RISC-V/baremetal 的重构支持边界表。
 - `target_architecture_and_tasks.md`: 建议的优化架构、模块交互方式和长期任务拆分。
 

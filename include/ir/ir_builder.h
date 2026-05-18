@@ -6,12 +6,9 @@
 #include "symbol_table.h"
 #include <cstddef>
 #include <cstdint>
-#include <iosfwd>
 #include <optional>
-#include <string_view>
 #include <string>
 #include <unordered_map>
-#include <variant>
 #include <vector>
 
 class BaseAST;
