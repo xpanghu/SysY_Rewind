@@ -213,11 +213,11 @@ void RewindIRBuilder::lower_global_decl(const DeclAST& ast, IRModule& module)
 
                         std::vector<int32_t> target_buffer;
                         target_buffer.reserve(length);
-                        process_const_array_init(init_val, array_dims, target_buffer);
+                        flatten_const_array_initializer(init_val, array_dims, target_buffer);
 
                         auto* array_type = get_array_type(array_dims, get_i32_type());
                         size_t cursor = 0;
-                        auto* init_aggregate = build_array_aggregate_from_flat(
+                        auto* init_aggregate = build_array_aggregate_initializer(
                             array_type,
                             target_buffer,
                             cursor,
@@ -284,8 +284,10 @@ void RewindIRBuilder::lower_global_decl(const DeclAST& ast, IRModule& module)
                             array_dims.push_back(eval_exp(exp_ast));
                         }
 
-                        int32_t length = std::accumulate(array_dims.begin(), array_dims.end(),
-                                                         1, std::multiplies<int32_t>());
+                        int32_t length = std::accumulate(array_dims.begin(),
+                                                         array_dims.end(),
+                                                         1,
+                                                         std::multiplies<int32_t>());
                         if (length <= 0) {
                             throw std::runtime_error("array length must be positive: " + uninit_array.ident);
                         }
@@ -332,11 +334,11 @@ void RewindIRBuilder::lower_global_decl(const DeclAST& ast, IRModule& module)
 
                         std::vector<int32_t> target_buffer;
                         target_buffer.reserve(length);
-                        process_array_init_const(init_val, array_dims, target_buffer);
+                        flatten_global_array_initializer(init_val, array_dims, target_buffer);
 
                         auto* array_type = get_array_type(array_dims, get_i32_type());
                         size_t cursor = 0;
-                        auto* init_aggregate = build_array_aggregate_from_flat(
+                        auto* init_aggregate = build_array_aggregate_initializer(
                             array_type,
                             target_buffer,
                             cursor,
@@ -525,10 +527,10 @@ void RewindIRBuilder::lower_const_decl(const ConstDeclAST& ast)
                     // flatten nested array initialization into a linear buffer
                     std::vector<int32_t> target_buffer;
                     target_buffer.reserve(length);
-                    process_const_array_init(init_val, array_dims, target_buffer);
+                    flatten_const_array_initializer(init_val, array_dims, target_buffer);
 
                     size_t cursor = 0;
-                    auto* init_aggregate = build_array_aggregate_from_flat(
+                    auto* init_aggregate = build_array_aggregate_initializer(
                         array_type,
                         target_buffer,
                         cursor,
@@ -638,14 +640,13 @@ void RewindIRBuilder::lower_var_decl(const VarDeclAST& ast)
 
                     std::vector<IRValue*> target_buffer;
                     target_buffer.reserve(length);
-                    process_array_init_runtime(array_init, array_dims, target_buffer);
-                    local_array_init(&alloc, array_dims, target_buffer);
+                    flatten_local_runtime_array_initializer(array_init, array_dims, target_buffer);
+                    emit_local_array_initializer_stores(&alloc, array_dims, target_buffer);
                 },
             },
             def.payload);
     }
 }
-
 
 IRValue* RewindIRBuilder::get_or_create_constant(int32_t value, IRModule& module)
 {

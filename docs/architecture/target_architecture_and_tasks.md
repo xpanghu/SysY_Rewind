@@ -34,10 +34,13 @@
 
 主线重构稳定后，下一阶段建议按这个顺序推进：
 
-1. [ ] A10 IR Verifier 和 Pass Manager。
-2. [ ] A11 SSA 和 mem2reg。
-3. [ ] A12 基础 IR 优化 Pass。
-4. [ ] A13 RISC-V 寄存器分配优化。
+1. [x] A5.6 语义检查和 lowering 解耦（第一阶段）。
+2. [x] A10 IR Verifier 和 Pass Manager（第一阶段）。
+3. [ ] A11 SSA 和 mem2reg。
+4. [ ] A12 基础 IR 优化 Pass。
+5. [ ] A13 RISC-V 寄存器分配优化。
+
+A5.6 放在 A10 之前，是因为它解决的是源语言层面的合法性和类型信息边界；A10 解决的是 IR 已经生成之后的内部结构契约。两者都能提升可靠性，但分属不同层，不能互相替代。
 
 说明：`-koopa` 是当前自定义 IR 文本形式的输出入口，名称来自早期实践和历史命名，不再把它视为一个需要单独辨析“自定义 IR 文本”或“Koopa 兼容文本”的任务。MLIR bridge 暂不放入本项目任务路线；如果后续要做，更适合作为新的 AI compiler 项目单独设计。
 
@@ -97,14 +100,18 @@ src/
 - 2026-04-25: 完成 A2 第一阶段。新增 `include/driver` 与 `src/driver`，`main.cpp` 只调用 `sysy::driver::run`，命令行解析和编译流程编排移动到 driver 层。
 - 2026-04-25: 完成 A8 的一部分。baremetal 构建、链接和 QEMU 运行逻辑迁移到 `Makefile`，脚本只保留兼容包装器；最终产物输出到 `riscv32-baremetal/<input-name>/`。
 - 2026-05-03: 完成 A0.2。`docs/architecture/support_matrix.md` 改为重构支持边界表，用来记录 SysY 能力跨 parser/AST、lowering、IR text、RISC-V/baremetal 的影响面和回归锚点。
-- 2026-05-03: 完成 A5.1 第一阶段。SysY runtime 声明从 `src/ir/ir_builder.cpp` 拆到 `src/ir/ir_builder_runtime.cpp`，`RewindIRBuilder::declare_library_function` 只保留兼容入口。
+- 2026-05-03: 完成 A5.1 第一阶段。SysY runtime 声明从 `src/ir/ir_builder.cpp` 拆到 `src/ir/ir_builder_runtime_decls.cpp`，`RewindIRBuilder::declare_library_function` 只保留兼容入口。
 - 2026-05-03: 完成 A5.2 第一阶段。常量求值主体从 `src/ir/ir_builder.cpp` 拆到 `src/ir/ir_builder_const_eval.cpp` 的 `ConstEvaluator`，`RewindIRBuilder::eval_exp` 作为现有 lowering 调用点的兼容入口。
 - 2026-05-06: 补充主线重构之后的能力建设路线：A10 IR Verifier 和 Pass Manager、A11 SSA 和 mem2reg、A12 基础 IR 优化 Pass、A13 RISC-V 寄存器分配优化。A10-A13 当前只作为长期路线合并记录，后续每项都应拆成独立任务文档；MLIR bridge 不放入当前项目路线。
 - 2026-05-18: 完成 A7.1。新增 `AsmWriter`，将 RISC-V 原始汇编文本输出从 `riscv.cpp` 中拆出，`IREmitter` 保留 IR 指令调度和后端遍历职责。
 - 2026-05-18: 调整任务文档结构。将推荐推进顺序移到文档开头并标记完成状态；移除“IR 文本输出整理”独立任务，明确 `-koopa` 当前就是自定义 IR 文本输出入口。
-- 2026-05-18: 完成 A7.2-A7.5 第一阶段。新增 `FrameLayout`、`CallingConvention`、`DataLayout` 和 `docs/architecture/riscv_backend_support.md`，将栈帧布局、调用约定、目标数据大小和后端支持边界从 `riscv.cpp` 中拆出。
-- 2026-05-18: 完成 A5.3-A5.5 第一阶段。数组初始化逻辑保留在 `src/ir/ir_builder_init.cpp`，表达式/lvalue/call lowering 移动到 `src/ir/ir_builder_expr.cpp`，语句和控制流 lowering 移动到 `src/ir/ir_builder_stmt.cpp`，共享 helper 收敛到 `src/ir/ir_builder_internal.h`。
+- 2026-05-18: 完成 A7.2-A7.5 第一阶段。新增 `FrameLayout`、`CallingConvention`、`DataLayout` 和 `docs/architecture/riscv_backend_design.md`，将栈帧布局、调用约定、目标数据大小和后端支持边界从 `riscv.cpp` 中拆出。
+- 2026-05-18: 完成 A5.3-A5.5 第一阶段。数组初始化逻辑保留在 `src/ir/ir_builder_array_init.cpp`，表达式/lvalue/call lowering 移动到 `src/ir/ir_builder_expr.cpp`，语句和控制流 lowering 移动到 `src/ir/ir_builder_stmt.cpp`，共享 helper 收敛到 `src/ir/ir_builder_internal.h`。
 - 2026-05-18: 完成 A9 第一阶段。新增 `scripts/run_regression_smoke.sh` 和 `make regression-smoke`，提供本地构建、hello 的 `-koopa/-riscv`、awesome-sysy `lisp.c` 的 RISC-V 生成，以及可选 Docker lv9 autotest 入口。
+- 2026-05-20: 补充 A5.6 语义检查和 lowering 解耦任务。明确后续推进顺序为 A5.6 -> A10 -> A11 -> A12 -> A13：先把源语言语义边界从 lowering 中逐步拆出，再建立 IR Verifier 和 PassManager，最后进入 SSA、优化和寄存器分配。
+- 2026-05-20: 完成 A5.6 第一阶段。新增 `include/ir/semantic_checks.h` 和 `src/ir/semantic_checks.cpp`，以 `VariableSemanticInfo` 承接部分符号解析结果，并将函数调用、左值可变性、数组下标数量、return、break/continue 等高频语义判断从 lowering 主流程中抽出；新增 `scripts/run_semantic_smoke.sh` 和 `make semantic-smoke` 验证合法/非法语义边界。
+- 2026-05-20: 完成 A10 第一阶段。新增 `IRVerifier`、`IRPassManager` 和 `IRNoOpModulePass`，driver 在 `-koopa`/`-riscv` 输出前执行 `lower -> verify -> no-op pass -> verify`；新增 `scripts/run_ir_verifier_smoke.sh` 和 `make ir-verifier-smoke`，覆盖合法 IR、错误 IR 和 no-op pass 不改变 IR 的最小闭环。
+- 2026-05-21: 推进 A8/A9 目录整理。新增 `docs/architecture/test_artifact_layout.md` 固定 `tests/`、`scripts/`、`tmp/`、`riscv32-baremetal/` 的职责；`tests/` 改为版本化测试资产，基础 smoke 输入迁到 `tests/smoke/`，`awesome-sysy` 稳定输入 fixture 迁到 `tests/fixtures/awesome-sysy/`，手工 `-ast/-koopa/-riscv` 输出统一进入 `tmp/manual/`。
 
 ## 模块交互
 
@@ -139,7 +146,7 @@ Driver
 
 小任务：
 
-- A0.1 维护 `docs/architecture/current_pipeline.md`。
+- A0.1 维护长期模块流文档，见 `docs/architecture/module_flow.md`。
 - A0.2 维护一张“重构支持边界表”，见 `docs/architecture/support_matrix.md`。
   这张表不是为了再次证明编译器能否正常运行，而是为了记录每类 SysY 能力穿过哪些阶段：
   parser/AST 是否能表达，语义/lowering 是否有规则，IR text 是否能打印，RISC-V/baremetal 是否能执行，以及当前依靠哪些测试保护。
@@ -238,19 +245,31 @@ Driver
 - `ExprLowerer`: 表达式和函数调用。
 - `LValueLowerer`: 左值、数组、指针 decay。
 - `ArrayInitLowerer`: 常量和运行时数组初始化。
+- `SemanticAnalyzer`: 源语言层面的声明收集、符号绑定、类型推断和语义错误检查。
+- `SemanticInfo`: lowering 可消费的语义信息，例如表达式类型、左值绑定、函数签名、数组维度和 array-to-pointer decay 决策。
 
 小任务：
 
-- A5.1 先抽 `RuntimeDecls`，因为它最独立。状态：第一阶段已完成，当前落在 `src/ir/ir_builder_runtime.cpp`。
+- A5.1 先抽 `RuntimeDecls`，因为它最独立。状态：第一阶段已完成，当前落在 `src/ir/ir_builder_runtime_decls.cpp`。
 - A5.2 抽 `ConstEvaluator`，让常量求值从 `RewindIRBuilder` 中分离。状态：第一阶段已完成，当前落在 `src/ir/ir_builder_const_eval.cpp`。
-- A5.3 抽数组初始化 helper。状态：第一阶段已完成，当前落在 `src/ir/ir_builder_init.cpp`。
+- A5.3 抽数组初始化 helper。状态：第一阶段已完成，当前落在 `src/ir/ir_builder_array_init.cpp`。
 - A5.4 抽表达式 lowering。状态：第一阶段已完成，当前落在 `src/ir/ir_builder_expr.cpp`。
 - A5.5 抽语句和控制流 lowering。状态：第一阶段已完成，当前落在 `src/ir/ir_builder_stmt.cpp`。
+- A5.6 语义检查和 lowering 解耦。状态：第一阶段已完成。当前新增 `semantic_checks` helper 和轻量 `VariableSemanticInfo`，先把函数调用、左值可变性、数组下标数量、return、break/continue 等高频语义判断从 lowering 主流程中抽出。后续再逐步扩展更完整的 `SemanticInfo` 和可独立运行的 `SemanticAnalyzer`。
+
+A5.6 建议推进顺序：
+
+1. 先梳理当前 lowering 中的语义检查点，区分 parser 语法错误、SysY 语义错误和 IR 结构错误。
+2. 抽出轻量 `SemanticInfo` 数据结构，先记录表达式类型、左值绑定和函数签名，不改变现有 IR 输出。
+3. 将函数调用、左值解析、const 赋值、返回类型检查等高频逻辑迁移为独立 semantic helper。
+4. 再引入 `SemanticAnalyzer` 作为可独立运行的 AST 遍历阶段，逐步让 lowering 从直接检查转为消费 `SemanticInfo`。
+5. 每一步都保留当前 `RewindIRBuilder` 兼容入口，确保 `-koopa`、`-riscv` 和 smoke 测试稳定。
 
 验收：
 
 - 每一步拆分后生成的 IR 文本保持一致。
 - 发生语义错误时能定位到负责模块。
+- lowering 中的错误判断逐步减少，源语言错误和 IR verifier 错误能清晰分层。
 
 ### A7 RISC-V 后端拆分
 
@@ -271,7 +290,7 @@ Driver
 - A7.2 再抽 `FrameLayout`。状态：第一阶段已完成，当前落在 `include/back_end/frame_layout.h` 和 `src/back_end/frame_layout.cpp`。
 - A7.3 抽 `CallingConvention`。状态：第一阶段已完成，当前落在 `include/back_end/calling_convention.h` 和 `src/back_end/calling_convention.cpp`。
 - A7.4 抽 target `DataLayout`，替代直接使用 `IRTypeContext` 的大小和对齐。状态：第一阶段已完成，当前落在 `include/back_end/data_layout.h` 和 `src/back_end/data_layout.cpp`。
-- A7.5 给每类 IR 指令建立后端支持表。状态：第一阶段已完成，见 `docs/architecture/riscv_backend_support.md`。
+- A7.5 给每类 IR 指令建立后端支持表。状态：第一阶段已完成，见 `docs/architecture/riscv_backend_design.md`。
 
 验收：
 
@@ -282,12 +301,14 @@ Driver
 
 目标：让 runtime 构建、临时文件和 baremetal 运行规则清楚稳定。
 
+状态：第一阶段已完成。当前目录边界见 `docs/architecture/test_artifact_layout.md`。
+
 小任务：
 
 - A8.1 保持 runtime 源码在 `third_party/sysyrt/baremetal`。
 - A8.2 保持生成物在 `build/sysyrt/riscv32-baremetal`。
 - A8.3 移除或忽略无用的 `third_party/sysyrt/riscv32-baremetal` 预编译目录。
-- A8.4 统一 `tmp/` 临时目录和清理规则。
+- A8.4 统一 `tmp/` 临时目录和清理规则。状态：第一阶段已完成，`tmp/` 只承载 smoke 输出和手工 scratch，单独使用 `make clean-tmp` 清理。
 - A8.5 QEMU 由用户手动运行或手动关闭，Makefile 不内置 timeout 逻辑。
 - A8.6 保留最终 RISC-V ELF，避免只在临时目录中链接后立即运行。
 - A8.7 将 baremetal 构建、链接和运行入口迁移到 `Makefile`。
@@ -302,12 +323,15 @@ Driver
 
 目标：每次重构都有低成本验证。
 
+状态：第一阶段已完成，并补充测试资产目录边界。
+
 小任务：
 
-- A9.1 建立小型 golden tests：AST、IR text、RISC-V asm。状态：第一阶段已完成，当前提供 `make regression-smoke` 的本地 smoke 输出入口。
+- A9.1 建立小型 golden tests：AST、IR text、RISC-V asm。状态：第一阶段已完成，当前提供 `make regression-smoke` 的本地 smoke 输出入口，基础输入位于 `tests/smoke/`。
 - A9.2 建立 baremetal smoke tests。状态：已有 `make run-riscv-baremetal`，本轮未改变。
 - A9.3 为曾经修过的问题加入用例：`!=`、`!!x`、`- -1`、大栈帧、数组初始化、函数调用。状态：第一阶段先保留在支持矩阵和 smoke 脚本中，后续可继续升级为 golden 文件对比。
 - A9.4 区分 baseline breakage 和当前任务引入的问题。状态：第一阶段通过 `scripts/run_regression_smoke.sh` 固定最小本地验证链路；Docker autotest 通过 `RUN_DOCKER_AUTOTEST=1` 显式打开。
+- A9.5 固定测试资产和临时产物目录边界。状态：第一阶段已完成，`tests/` 保存可追踪输入/fixture，`tmp/` 保存可再生输出。
 
 验收：
 
@@ -318,15 +342,25 @@ Driver
 
 目标：在继续添加优化之前，先让 IR 有结构校验和统一 pass 管线。
 
+状态：第一阶段已完成。当前实现只建立 IR 输出前安全网和 pass 管线入口，不引入实际优化，也不替代源语言语义检查。
+
 说明：A10 到 A13 是主线重构完成后的下一阶段能力建设。它们当前先记录在同一份长期任务文档中，避免现在过早拆散上下文；等 A1-A9 的边界重构稳定后，A10、A11、A12、A13 都应该分别建立独立任务文档。
+
+A10 不替代 A5.6 的语义检查。A5.6 面向 SysY 源语言规则，A10 面向已经生成的 IR 内部不变量，例如控制流完整、跳转目标有效、操作数类型匹配、函数调用和返回值类型一致。
 
 小任务：
 
-- A10.1 建立 `IRVerifier`，检查函数签名、基本块终结指令、跳转目标、指令操作数类型、`load/store/call/return` 类型匹配。
-- A10.2 明确 verifier 在 pipeline 中的位置，至少在 `-koopa` 和 `-riscv` 输出前可以运行。
-- A10.3 设计轻量 `Pass` / `PassManager` 接口，先支持 module/function 级别 pass。
-- A10.4 接入一个 no-op pass 或统计 pass，验证 pass 管线不改变 IR 行为。
-- A10.5 建立 verifier/pass 相关最小测试，覆盖错误 IR、合法 IR 和 no-op pass 输出一致性。
+- A10.1 建立 `IRVerifier`，检查函数签名、基本块终结指令、跳转目标、指令操作数类型、`load/store/call/return` 类型匹配。状态：第一阶段已完成。
+- A10.2 明确 verifier 在 pipeline 中的位置，至少在 `-koopa` 和 `-riscv` 输出前可以运行。状态：第一阶段已完成，当前 driver 在 pass 前后各验证一次。
+- A10.3 设计轻量 `Pass` / `PassManager` 接口，先支持 module/function 级别 pass。状态：第一阶段已完成。
+- A10.4 接入一个 no-op pass 或统计 pass，验证 pass 管线不改变 IR 行为。状态：第一阶段已完成，当前接入 `IRNoOpModulePass`。
+- A10.5 建立 verifier/pass 相关最小测试，覆盖错误 IR、合法 IR 和 no-op pass 输出一致性。状态：第一阶段已完成，当前提供 `make ir-verifier-smoke`。
+
+第一阶段实现边界：
+
+- `IRVerifier` 只检查 IR 内部不变量，不负责 SysY 语义规则，例如是否允许修改 const、是否处在 while 内使用 break。
+- `IRPassManager` 当前只提供 module/function pass 的顺序执行能力，no-op pass 用来验证管线接入，不改变 IR。
+- 后续进入 A11/A12 时，每个新增 IR 表达能力或优化 pass 都应同步补 verifier 规则和 smoke/golden 用例。
 
 验收：
 

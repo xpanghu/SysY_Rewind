@@ -10,9 +10,9 @@ mkdir -p "${OUT_DIR}"
 
 cmake --build "${BUILD_DIR}" -j12 -- -s
 
-"${COMPILER}" -koopa "${ROOT_DIR}/tests/hello.sysy" \
+"${COMPILER}" -koopa "${ROOT_DIR}/tests/smoke/hello.sysy" \
   -o "${OUT_DIR}/hello.koopa"
-"${COMPILER}" -riscv "${ROOT_DIR}/tests/hello.sysy" \
+"${COMPILER}" -riscv "${ROOT_DIR}/tests/smoke/hello.sysy" \
   -o "${OUT_DIR}/hello.s"
 "${COMPILER}" -riscv "${ROOT_DIR}/tests/awesome-sysy/lisp.c" \
   -o "${OUT_DIR}/lisp.s"

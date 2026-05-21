@@ -1,6 +1,7 @@
 #include "ir_builder.h"
 #include "func_context.h"
 #include "ir_builder_internal.h"
+#include "semantic_checks.h"
 #include <stdexcept>
 #include <string>
 #include <typeinfo>
@@ -22,9 +23,9 @@ void RewindIRBuilder::lower_stmt(const StmtAST& ast)
                  * then check if return exp type same as  function return type
                  */
                 if (ret_stmt.exp) {
-                    if (current_ctx_->current_function().type_->return_type->is_unit()) {
-                        throw std::runtime_error("void function should not return a value");
-                    }
+                    semantic::require_return_value_compatible(
+                        current_ctx_->current_function().type_->return_type,
+                        true);
                     const auto& exp = expect_node<ExpAST>(*ret_stmt.exp, "ExpAST");
                     ret_value = lower_exp(exp);
                 } else if (current_ctx_->current_function().type_->return_type->is_int32()) {
@@ -175,20 +176,14 @@ void RewindIRBuilder::lower_stmt(const StmtAST& ast)
                 current_ctx_->set_current_block(end);
             },
             [&](const StmtAST::LoopControlStmt& control_stmt) {
-                if (!current_ctx_->in_loop()) {
-                    if (control_stmt.kind == StmtAST::LoopControlStmt::Kind::Break) {
-                        throw std::runtime_error("break used outside while");
-                    } else {
-                        throw std::runtime_error("continue used outside while");
-                    }
-                }
-
                 switch (control_stmt.kind) {
                 case StmtAST::LoopControlStmt::Kind::Break: {
+                    semantic::require_loop_control_inside_loop(current_ctx_->in_loop(), "break");
                     current_ctx_->terminate_with_jump(*current_ctx_->current_loop().break_target);
                     break;
                 }
                 case StmtAST::LoopControlStmt::Kind::Continue: {
+                    semantic::require_loop_control_inside_loop(current_ctx_->in_loop(), "continue");
                     current_ctx_->terminate_with_jump(
                         *current_ctx_->current_loop().continue_target);
                     break;

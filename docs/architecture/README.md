@@ -8,10 +8,10 @@
 
 ## 文档索引
 
-- `current_pipeline.md`: 当前代码链路、模块职责和已发现的耦合点。
 - `module_flow.md`: 当前编译链路的两段式 Mermaid 模块图，分别描述输入到 AST、AST 到 IR/RISC-V 的数据流。
-- `riscv_backend_support.md`: RISC-V 后端组件边界、IR 指令支持表和后端重构时的最小验证方式。
+- `riscv_backend_design.md`: RISC-V 后端组件边界、IR 指令支持表、最小 Machine IR 演进方案和后端重构时的最小验证方式。
 - `support_matrix.md`: 当前语法能力跨 parser/AST、lowering、IR text、RISC-V/baremetal 的重构支持边界表。
+- `test_artifact_layout.md`: A8/A9 目录整理边界，说明测试资产、脚本入口、临时产物和 baremetal 产物各自放在哪里。
 - `target_architecture_and_tasks.md`: 建议的优化架构、模块交互方式和长期任务拆分。
 
 ## 工作方式

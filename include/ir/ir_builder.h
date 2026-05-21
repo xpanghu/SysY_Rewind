@@ -77,25 +77,23 @@ private:
     IRValue* lower_lval_array_address(const LValAST& ast, IRValue*, const IRType*, bool allow_array_decay = false);
     IRValue* lower_lval_pointer_address(const LValAST& ast, IRValue*, const IRType*, bool allow_array_decay = false);
 
-    IRValue* build_array_aggregate_from_flat(const IRArrayType* array_type,
-                                             const std::vector<int32_t>& flat_values,
-                                             size_t& cursor,
-                                             IRModule& module);
-    void process_array_init_const(const InitValAST& init_val,
-                                  const std::vector<int32_t>& array_dims,
-                                  std::vector<int32_t>& target_buffer,
-                                  size_t current_dim_idx = 0);
-    void process_array_init_runtime(const InitValAST& init_val,
-                                    const std::vector<int32_t>& array_dims,
-                                    std::vector<IRValue*>& target_buffer,
-                                    size_t current_dim_idx = 0);
-    void local_array_init(IRValue* alloc,
-                          const std::vector<int32_t>& array_dims,
-                          const std::vector<IRValue*>& values);
-    void process_const_array_init(const ConstInitValAST& init_val,
-                                  const std::vector<int32_t>& array_dims,
-                                  std::vector<int32_t>& target_buffer,
-                                  size_t current_dim_idx = 0);
+    // Array initializer helpers: flatten AST initializers, build aggregates, or emit local stores.
+    IRValue* build_array_aggregate_initializer(const IRArrayType* array_type,
+                                               const std::vector<int32_t>& flat_values,
+                                               size_t& cursor,
+                                               IRModule& module);
+    void flatten_global_array_initializer(const InitValAST& init_val,
+                                          const std::vector<int32_t>& array_dims,
+                                          std::vector<int32_t>& target_buffer);
+    void flatten_local_runtime_array_initializer(const InitValAST& init_val,
+                                                 const std::vector<int32_t>& array_dims,
+                                                 std::vector<IRValue*>& target_buffer);
+    void emit_local_array_initializer_stores(IRValue* alloc,
+                                             const std::vector<int32_t>& array_dims,
+                                             const std::vector<IRValue*>& values);
+    void flatten_const_array_initializer(const ConstInitValAST& init_val,
+                                         const std::vector<int32_t>& array_dims,
+                                         std::vector<int32_t>& target_buffer);
     int32_t eval_exp(const ExpAST& ast);
 
     // if constant exists, will Reuse previous constant

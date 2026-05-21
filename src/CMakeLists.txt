@@ -28,11 +28,14 @@ set(IR_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/ir/ir_builder.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ir/ir_builder_const_eval.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ir/ir_builder_expr.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ir/ir_builder_init.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/ir/ir_builder_runtime.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ir/ir_builder_array_init.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ir/ir_builder_runtime_decls.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ir/ir_builder_stmt.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ir/ir_type.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ir/ir_text_gen.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ir/ir_verifier.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ir/pass_manager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ir/semantic_checks.cpp
 )
 
 set(BACKEND_SRCS

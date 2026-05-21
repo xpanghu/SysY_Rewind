@@ -1,10 +1,11 @@
 IMAGE = maxxing/compiler-dev
 BUILD_DIR = build
 COMPILER = $(BUILD_DIR)/compiler
-SIMPLE_TEST = ./tests/hello.sysy
+SIMPLE_TEST = ./tests/smoke/hello.sysy
 INPUT ?= $(SIMPLE_TEST)
 INPUT_DATA ?=
 RISCV_OUT_DIR = riscv32-baremetal
+MANUAL_OUT_DIR = tmp/manual
 
 PROGRAM_NAME = $(basename $(notdir $(INPUT)))
 PROGRAM_DIR = $(RISCV_OUT_DIR)/$(PROGRAM_NAME)
@@ -23,6 +24,7 @@ LINKER_SCRIPT = $(SYSYRT_DIR)/linker.ld
 CROSS_CC ?= riscv64-unknown-elf-gcc
 CROSS_AR ?= riscv64-unknown-elf-ar
 QEMU ?= qemu-system-riscv32
+HOST_CXX ?= $(shell if [ -x /usr/bin/clang++ ]; then echo /usr/bin/clang++; else command -v clang++; fi)
 
 ARCH_FLAGS = -march=rv32im -mabi=ilp32
 BAREMETAL_CFLAGS = -O2 -ffreestanding -fno-builtin -nostdlib -Wall
@@ -33,12 +35,12 @@ UID := $(shell id -u)
 GID := $(shell id -g)
 PWD := $(shell pwd)
 
-.PHONY: all config build clean clean-riscv run-ast run-koopa run-riscv sysyrt riscv-asm riscv-elf run-riscv-baremetal regression-smoke
+.PHONY: all config build clean clean-tmp clean-riscv run-ast run-koopa run-riscv sysyrt riscv-asm riscv-elf run-riscv-baremetal regression-smoke semantic-smoke ir-verifier-smoke
 
 all: build
 
 config:
-	cmake -S . -B $(BUILD_DIR) -DCMAKE_CXX_COMPILER=clang++
+	cmake -S . -B $(BUILD_DIR) -DCMAKE_CXX_COMPILER=$(HOST_CXX)
 
 build: $(COMPILER)
 
@@ -47,18 +49,24 @@ $(COMPILER): config
 #可选，不会出现层级日志
 	cmake --build $(BUILD_DIR) -j12 -- -s  
 
+$(MANUAL_OUT_DIR):
+	mkdir -p $@
+
 clean:
 	rm -rf $(BUILD_DIR) $(RISCV_OUT_DIR)
+
+clean-tmp:
+	rm -rf tmp
 
 clean-riscv:
 	rm -rf $(RISCV_OUT_DIR)
 
-run-ast:
-	$(COMPILER) -ast $(SIMPLE_TEST) -o ./debug/hello.ast
-run-koopa:
-	$(COMPILER) -koopa $(SIMPLE_TEST) -o ./debug/hello.koopa
-run-riscv:
-	$(COMPILER) -riscv $(SIMPLE_TEST) -o ./debug/hello.asm
+run-ast: $(COMPILER) | $(MANUAL_OUT_DIR)
+	$(COMPILER) -ast $(SIMPLE_TEST) -o $(MANUAL_OUT_DIR)/hello.ast
+run-koopa: $(COMPILER) | $(MANUAL_OUT_DIR)
+	$(COMPILER) -koopa $(SIMPLE_TEST) -o $(MANUAL_OUT_DIR)/hello.koopa
+run-riscv: $(COMPILER) | $(MANUAL_OUT_DIR)
+	$(COMPILER) -riscv $(SIMPLE_TEST) -o $(MANUAL_OUT_DIR)/hello.s
 
 $(SYSYRT_BUILD_DIR):
 	mkdir -p $@
@@ -100,3 +108,9 @@ endif
 
 regression-smoke:
 	./scripts/run_regression_smoke.sh
+
+semantic-smoke:
+	./scripts/run_semantic_smoke.sh
+
+ir-verifier-smoke:
+	./scripts/run_ir_verifier_smoke.sh

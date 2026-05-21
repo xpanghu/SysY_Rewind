@@ -294,8 +294,8 @@ private:
 // Store :: = "store"(Value | Initializer) "," SYMBOL;
 // SYMBOL type must be pointer type, set to *t
 // then (Value | Initializer) type is t
-// type unit
-// name empty
+// store inst type is unit
+// store inst name is empty
 class IRStoreInst : public IRInstruction
 {
     friend class IRModule;

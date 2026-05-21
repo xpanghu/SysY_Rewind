@@ -2,6 +2,8 @@
 #include "ast.h"
 #include "ir_builder.h"
 #include "ir_text_gen.h"
+#include "ir_verifier.h"
+#include "pass_manager.h"
 #include "riscv.h"
 #include <cstdio>
 #include <exception>
@@ -104,6 +106,13 @@ int run_compiler(const CompilerOptions& options, std::ostream&)
 
     rewind_ir::RewindIRBuilder rewind_builder;
     rewind_ir::IRModule module = rewind_builder.build(*ast);
+    rewind_ir::verify_or_throw(module);
+
+    rewind_ir::IRPassManager pass_manager;
+    pass_manager.add_module_pass(std::make_unique<rewind_ir::IRNoOpModulePass>());
+    pass_manager.run(module);
+
+    rewind_ir::verify_or_throw(module);
 
     switch (options.mode) {
     case CompileMode::Ast:

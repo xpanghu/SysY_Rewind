@@ -87,5 +87,7 @@ docker run -i --rm \
 baremetal 本地闭环：
 
 ```bash
-make run-riscv-baremetal INPUT=tests/hello.sysy INPUT_DATA=tests/hello.in
+make run-riscv-baremetal \
+  INPUT=tests/awesome-sysy/lisp.c \
+  INPUT_DATA=tests/fixtures/awesome-sysy/lisp-simple.in
 ```

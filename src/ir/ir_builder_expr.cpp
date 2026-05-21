@@ -1,6 +1,7 @@
 #include "ir_builder.h"
 #include "func_context.h"
 #include "ir_builder_internal.h"
+#include "semantic_checks.h"
 #include "symbol_table.h"
 #include <stdexcept>
 #include <utility>
@@ -328,40 +329,29 @@ IRValue* RewindIRBuilder::lower_unary_exp(const UnaryExpAST& ast)
             [&](const UnaryExpAST::FuncCall& funcCall) -> IRValue* {
                 // check if function exist
                 auto* callee = lookup_function(funcCall.ident);
-
-                if (callee == nullptr) {
-                    throw std::runtime_error("undefined function: " + funcCall.ident);
-                }
+                semantic::require_function_defined(callee, funcCall.ident);
 
                 // get params
                 std::vector<IRValue*> args;
+                const size_t actual_count = funcCall.func_r_params != nullptr
+                                                ? expect_node<FuncRParamsAST>(
+                                                      *funcCall.func_r_params,
+                                                      "FuncRParamsAST").exps.size()
+                                                : 0;
+                semantic::require_call_argument_count(*callee, actual_count, funcCall.ident);
+
                 if (funcCall.func_r_params != nullptr) {
                     const auto& func_r_params =
                         expect_node<FuncRParamsAST>(*funcCall.func_r_params, "FuncRParamsAST");
-
-                    if (func_r_params.exps.size() != callee->type_->params.size()) {
-                        throw std::runtime_error(
-                            "function argument count mismatch: " + funcCall.ident);
-                    }
 
                     for (size_t i = 0; i < func_r_params.exps.size(); ++i) {
                         const auto& item = func_r_params.exps[i];
                         const auto& exp_ast = expect_node<ExpAST>(*item, "ExpAST");
                         args.push_back(lower_call_arg(exp_ast, callee->type_->params[i]));
-                    }
-                }
-
-                // check if params match
-                // from two sides : size and type_
-                if (args.size() != callee->type_->params.size()) {
-                    throw std::runtime_error(
-                        "function argument count mismatch: " + funcCall.ident);
-                }
-
-                for (size_t i = 0; i < args.size(); ++i) {
-                    if (!is_call_arg_type_compatible(args[i]->type_, callee->type_->params[i])) {
-                        throw std::runtime_error(
-                            "function argument type mismatch: " + funcCall.ident);
+                        semantic::require_call_argument_type(
+                            args.back()->type_,
+                            callee->type_->params[i],
+                            funcCall.ident);
                     }
                 }
 
@@ -395,20 +385,11 @@ IRValue* RewindIRBuilder::lower_call_arg(const ExpAST& ast, const IRType* expect
 
         // not variable
         if (lval_ast == nullptr) {
-            throw std::runtime_error("actual param type not match formal param");
+            semantic::throw_call_argument_type_mismatch();
         }
 
-        // not found or constant
         auto lval = lookup_value(lval_ast->ident);
-        if (!lval || !std::holds_alternative<SymbolTable::Var>(*lval)) {
-            throw std::runtime_error("actual param type not match formal param");
-        }
-
-        // not array
-        auto* storage = std::get<SymbolTable::Var>(*lval).alloc;
-        if (!is_array_storage(storage)) {
-            throw std::runtime_error("actual param type not match formal param");
-        }
+        auto* storage = semantic::require_array_argument_storage(lval).storage;
 
         IRValue* actual = nullptr;
         IRValue* zero_value = get_or_create_constant(0, current_ctx_->module());
@@ -437,7 +418,7 @@ IRValue* RewindIRBuilder::lower_call_arg(const ExpAST& ast, const IRType* expect
         }
 
         if (actual == nullptr) {
-            throw std::runtime_error("actual param type not match formal param");
+            semantic::throw_call_argument_type_mismatch();
         }
 
         if (actual->type_ == expected_ty) {
@@ -492,17 +473,11 @@ IRValue* RewindIRBuilder::lower_lval_array_address(const LValAST& ast,
                                                    bool allow_array_decay)
 {
     size_t array_dim = current_elem_type->as<IRArrayType>()->getArrayDim();
-
-    if (array_dim < ast.indices.size()) {
-        throw std::runtime_error("too many indices for array: " + ast.ident);
-    }
-
-    if (array_dim > ast.indices.size() && !allow_array_decay) {
-        if (ast.indices.empty()) {
-            throw std::runtime_error("array is not assignable without index: " + ast.ident);
-        }
-        throw std::runtime_error("less indices for array: " + ast.ident);
-    }
+    semantic::require_array_index_count(
+        ast.ident,
+        array_dim,
+        ast.indices.size(),
+        allow_array_decay);
 
     // chain getelemptr for multi-dimensional array access
     for (size_t i = 0; i < ast.indices.size(); ++i) {
@@ -534,9 +509,7 @@ IRValue* RewindIRBuilder::lower_lval_pointer_address(const LValAST& ast,
         current_ctx_->next_percent_name());
 
     if (ast.indices.empty()) {
-        if (!allow_array_decay) {
-            throw std::runtime_error("array is not assignable without index: " + ast.ident);
-        }
+        semantic::require_array_decay_allowed(ast.ident, allow_array_decay);
         return loaded_ptr;
     }
 
@@ -553,14 +526,11 @@ IRValue* RewindIRBuilder::lower_lval_pointer_address(const LValAST& ast,
     size_t remaining_dim =
         current_elem_type->is_array() ? current_elem_type->as<IRArrayType>()->getArrayDim() : 0;
     size_t provided_remaining = ast.indices.size() - 1;
-
-    if (provided_remaining > remaining_dim) {
-        throw std::runtime_error("too many indices for array: " + ast.ident);
-    }
-
-    if (provided_remaining < remaining_dim && !allow_array_decay) {
-        throw std::runtime_error("less indices for array: " + ast.ident);
-    }
+    semantic::require_pointer_array_index_count(
+        ast.ident,
+        remaining_dim,
+        provided_remaining,
+        allow_array_decay);
 
     for (int i = 1; i < ast.indices.size(); i++) {
         const auto& exp_ast = expect_node<ExpAST>(*ast.indices[i], "ExpAST");
@@ -582,12 +552,8 @@ IRValue* RewindIRBuilder::lower_lval_rvalue(const LValAST& ast)
 {
     auto lval = lookup_value(ast.ident);
 
-    if (!lval) {
-        throw std::runtime_error(ast.ident + " is not exist");
-    }
-
     // constexpr
-    if (std::holds_alternative<SymbolTable::Constant>(*lval)) {
+    if (lval && std::holds_alternative<SymbolTable::Constant>(*lval)) {
         return get_or_create_constant(
             std::get<SymbolTable::Constant>(*lval).value,
             current_ctx_->module());
@@ -609,23 +575,12 @@ IRValue* RewindIRBuilder::lower_lval_storage_address(const LValAST& ast,
                                                      bool allow_array_decay,
                                                      bool require_mutable)
 {
-    // check if value can be modified
     auto lval = lookup_value(ast.ident);
+    const auto var_info = require_mutable
+                              ? semantic::require_mutable_variable_symbol(lval, ast.ident)
+                              : semantic::require_variable_symbol(lval, ast.ident);
 
-    if (!lval) {
-        throw std::runtime_error(ast.ident + " is not exist");
-    }
-
-    if (std::holds_alternative<SymbolTable::Constant>(*lval)) {
-        throw std::runtime_error(ast.ident + " is constant");
-    }
-
-    const auto& var_info = std::get<SymbolTable::Var>(*lval);
-    if (require_mutable && var_info.is_const) {
-        throw std::runtime_error(ast.ident + " is const");
-    }
-
-    auto* var = var_info.alloc;
+    auto* var = var_info.storage;
 
     // array
     if (is_array_storage(var)) {
@@ -647,9 +602,7 @@ IRValue* RewindIRBuilder::lower_lval_storage_address(const LValAST& ast,
     }
 
     // scalar
-    if (!ast.indices.empty()) {
-        throw std::runtime_error(ast.ident + " is not array");
-    }
+    semantic::require_scalar_without_indices(ast.ident, !ast.indices.empty());
 
     return var;
 }
