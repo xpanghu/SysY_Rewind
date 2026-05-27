@@ -142,6 +142,11 @@ public:
         return kind_ == IRValueKind::FUNC_ARG_REF;
     }
 
+    bool is_block_arg_ref() const
+    {
+        return kind_ == IRValueKind::BLOCK_ARG_REF;
+    }
+
     bool is_get_elem_ptr() const
     {
         return kind_ == IRValueKind::IR_GET_ELEM_PTR;
@@ -225,6 +230,28 @@ private:
 
     explicit IRFuncArgRef(size_t index, const IRType* ty, const std::string& name = {}) :
         IRValue(IRValueKind::FUNC_ARG_REF, ty, name),
+        index_(index)
+    {
+    }
+};
+
+// basic block formal arg
+class IRBlockArgRef : public IRValue
+{
+    friend class IRModule;
+
+public:
+    IRBasicBlock* owner_;
+    size_t index_; // arg position in owner block
+    ~IRBlockArgRef() override = default;
+
+private:
+    IRBlockArgRef() = default;
+
+    explicit IRBlockArgRef(IRBasicBlock* owner, size_t index, const IRType* ty,
+                           const std::string& name = {}) :
+        IRValue(IRValueKind::BLOCK_ARG_REF, ty, name),
+        owner_(owner),
         index_(index)
     {
     }
@@ -454,17 +481,24 @@ public:
     IRValue* cond_; // binary inst / constant value / load inst
     IRBasicBlock* if_basic_block_;
     IRBasicBlock* else_basic_block_; // else bb or end merge bb
+    std::vector<IRValue*> if_args_;
+    std::vector<IRValue*> else_args_;
 
     ~IRBranchInst() override = default;
 
 private:
     IRBranchInst() = default;
 
-    explicit IRBranchInst(IRValue* cond, IRBasicBlock* if_block, IRBasicBlock* else_block, const IRType* ty, const std::string& name = {}) :
+    explicit IRBranchInst(IRValue* cond, IRBasicBlock* if_block, IRBasicBlock* else_block,
+                          const IRType* ty, std::vector<IRValue*> if_args = {},
+                          std::vector<IRValue*> else_args = {},
+                          const std::string& name = {}) :
         IRInstruction(IRValueKind::IR_BRANCH, ty, name),
         cond_(cond),
         if_basic_block_(if_block),
-        else_basic_block_(else_block)
+        else_basic_block_(else_block),
+        if_args_(std::move(if_args)),
+        else_args_(std::move(else_args))
     {
     }
 };
@@ -475,14 +509,17 @@ class IRJumpInst : public IRInstruction
 
 public:
     IRBasicBlock* jump_basic_block_;
+    std::vector<IRValue*> args_;
 
 private:
     IRJumpInst() = default;
 
     explicit IRJumpInst(IRBasicBlock* jump_block, const IRType* ty,
+                        std::vector<IRValue*> args = {},
                         const std::string& name = {}) :
         IRInstruction(IRValueKind::IR_JUMP, ty, name),
-        jump_basic_block_(jump_block)
+        jump_basic_block_(jump_block),
+        args_(std::move(args))
     {
     }
 };
@@ -491,7 +528,6 @@ private:
  * Block ::= SYMBOL ":" {Statement} EndStatement;
  * Statement ::= SymbolDef | Store | FunCall;
  * EndStatement ::= Branch | Jump | Return;
-
  * br, jump or ret can be the basic block's termination instruction
  */
 class IRBasicBlock
@@ -500,12 +536,14 @@ class IRBasicBlock
 
 public:
     std::string name_;
+    std::vector<IRValue*> params_;
     std::vector<IRValue*> insts_;
 
 private:
     IRBasicBlock() = default;
     explicit IRBasicBlock(const std::string& name, std::vector<IRValue*> insts = {}) :
         name_(name),
+        params_({}),
         insts_(insts)
     {
     }
@@ -546,8 +584,8 @@ private:
     }
 };
 
-// IRModule
-// * const value store in RewindIRBuilder constant_cache_
+// IRModule owns every IRValue created through make_value, including IRConstant.
+// RewindIRBuilder may keep non-owning caches for reuse during lowering.
 class IRModule
 {
 public:
@@ -565,7 +603,9 @@ public:
     template <typename T, typename... Args>
     T* make_value(Args&&... args);
 
-    // void append_global_value(IRValue& value);
+    IRBlockArgRef* make_block_param(IRBasicBlock& block,
+                                    const IRType* type,
+                                    const std::string& name = {});
 
     void append_param(IRFunction& function, IRValue& value);
 
@@ -606,9 +646,23 @@ template <typename T, typename... Args>
 inline T* IRModule::make_value(Args&&... args)
 {
     static_assert(std::is_base_of_v<IRValue, T>, "make_value<T>: T must derive from IRValue");
+    static_assert(!std::is_same_v<T, IRBlockArgRef>,
+                  "use IRModule::make_block_param to create block arguments");
     std::unique_ptr<T> value(new T(std::forward<Args>(args)...));
     T* ptr = value.get();
     value_storage_.push_back(std::move(value));
+    return ptr;
+}
+
+inline IRBlockArgRef* IRModule::make_block_param(IRBasicBlock& block,
+                                                 const IRType* type,
+                                                 const std::string& name)
+{
+    auto index = block.params_.size();
+    std::unique_ptr<IRBlockArgRef> value(new IRBlockArgRef(&block, index, type, name));
+    IRBlockArgRef* ptr = value.get();
+    value_storage_.push_back(std::move(value));
+    block.params_.push_back(ptr);
     return ptr;
 }
 

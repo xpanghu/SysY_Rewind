@@ -126,8 +126,21 @@ void IRTextGen::print_function(const IRFunction* previous,
 
 void IRTextGen::print_basic_block(const IRBasicBlock* block, std::ostream& out)
 {
-    // basic block name：%entry:
-    out << block->name_ << ":\n";
+    // basic block name: %entry: or %merge(%x: i32):
+    out << block->name_;
+    if (!block->params_.empty()) {
+        out << "(";
+        for (size_t i = 0; i < block->params_.size(); ++i) {
+            if (i > 0) {
+                out << ", ";
+            }
+            print_value(block->params_[i], out);
+            out << ": ";
+            print_type(block->params_[i]->type_, out);
+        }
+        out << ")";
+    }
+    out << ":\n";
 
     // print all insts
     for (const auto* inst : block->insts_) {
@@ -224,12 +237,28 @@ void IRTextGen::print_instruction(const IRValue* inst, std::ostream& out)
         const auto* branch = inst->as<IRBranchInst>();
         const auto* if_bb = branch->if_basic_block_;
         const auto* else_bb = branch->else_basic_block_;
+        const auto print_successor = [this, &out](const IRBasicBlock* block,
+                                                   const std::vector<IRValue*>& args) {
+            out << block->name_;
+            if (args.empty()) {
+                return;
+            }
+            out << "(";
+            for (size_t i = 0; i < args.size(); ++i) {
+                if (i > 0) {
+                    out << ", ";
+                }
+                print_value(args[i], out);
+            }
+            out << ")";
+        };
 
         out << "  " << "br ";
         print_value(branch->cond_, out);
         out << ", ";
-        out << if_bb->name_ << ", ";
-        out << else_bb->name_;
+        print_successor(if_bb, branch->if_args_);
+        out << ", ";
+        print_successor(else_bb, branch->else_args_);
         break;
     }
     case rewind_ir::IRValueKind::IR_JUMP: {
@@ -238,6 +267,16 @@ void IRTextGen::print_instruction(const IRValue* inst, std::ostream& out)
 
         out << "  " << "jump ";
         out << jump_bb->name_;
+        if (!jump->args_.empty()) {
+            out << "(";
+            for (size_t i = 0; i < jump->args_.size(); ++i) {
+                if (i > 0) {
+                    out << ", ";
+                }
+                print_value(jump->args_[i], out);
+            }
+            out << ")";
+        }
         break;
     }
     default: {

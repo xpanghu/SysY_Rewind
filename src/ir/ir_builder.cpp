@@ -407,10 +407,10 @@ IRFunction* RewindIRBuilder::lower_func_def(const FuncDefAST& ast, IRModule& mod
      */
     if (ctx.has_current_block()) {
         if (func->type_->return_type->is_unit()) {
-            static_cast<void>(ctx.terminate_with_return(nullptr));
+            static_cast<void>(ctx.terminate_with_return());
         } else if (func->type_->return_type->is_int32()) {
             static_cast<void>(ctx.terminate_with_return(
-                get_or_create_constant(0, module)));
+                *get_or_create_constant(0, module)));
         } else {
             throw std::runtime_error("unsupported function return type");
         }

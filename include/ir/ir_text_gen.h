@@ -24,8 +24,6 @@ public:
 
     IRErrorCode emit_to_string(const IRModule& module, std::string& out);
 
-    IRErrorCode emit_to_file(const IRModule& module, const std::string& file);
-
     std::string_view last_error() const
     {
         return last_error_;

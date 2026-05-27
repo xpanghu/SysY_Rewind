@@ -79,7 +79,7 @@ IRValue* RewindIRBuilder::lower_lor_exp(const LOrExpAST& ast)
 
                 // br lhs_bool short_true rhs_bb
                 static_cast<void>(current_ctx_->terminate_with_branch(
-                    &lhs_bool,
+                    lhs_bool,
                     short_true,
                     rhs_bb));
 
@@ -156,7 +156,7 @@ IRValue* RewindIRBuilder::lower_land_exp(const LAndExpAST& ast)
                     get_i32_type(),
                     current_ctx_->next_percent_name());
                 static_cast<void>(current_ctx_->terminate_with_branch(
-                    &lhs_bool,
+                    lhs_bool,
                     rhs_bb,
                     short_false));
 
@@ -249,20 +249,20 @@ IRValue* RewindIRBuilder::lower_add_exp(const AddExpAST& ast)
 {
     return std::visit(
         overloaded{
-            [&](const AddExpAST::Simple& s) -> IRValue* {
+            [&](const AddExpAST::Simple& simple) -> IRValue* {
                 const auto& mul_exp =
-                    expect_node<MulExpAST>(*s.mul_exp, "MulExpAST");
+                    expect_node<MulExpAST>(*simple.mul_exp, "MulExpAST");
                 return lower_mul_exp(mul_exp);
             },
-            [&](const AddExpAST::Binary& b) -> IRValue* {
+            [&](const AddExpAST::Binary& binary) -> IRValue* {
                 const auto& add_exp =
-                    expect_node<AddExpAST>(*b.add_exp, "AddExpAST");
+                    expect_node<AddExpAST>(*binary.add_exp, "AddExpAST");
                 const auto& mul_exp =
-                    expect_node<MulExpAST>(*b.mul_exp, "MulExpAST");
+                    expect_node<MulExpAST>(*binary.mul_exp, "MulExpAST");
 
                 auto lhs = lower_add_exp(add_exp);
                 auto rhs = lower_mul_exp(mul_exp);
-                auto op = ast_op_to_ir_op(b.op);
+                auto op = ast_op_to_ir_op(binary.op);
 
                 return &current_ctx_->create_block_value<IRBinaryInst>(
                     op, lhs, rhs, get_i32_type(), current_ctx_->next_percent_name());
@@ -274,20 +274,20 @@ IRValue* RewindIRBuilder::lower_mul_exp(const MulExpAST& ast)
 {
     return std::visit(
         overloaded{
-            [&](const MulExpAST::Simple& s) -> IRValue* {
+            [&](const MulExpAST::Simple& simple) -> IRValue* {
                 const auto& unary_exp =
-                    expect_node<UnaryExpAST>(*s.unary_exp, "UnaryExpAST");
+                    expect_node<UnaryExpAST>(*simple.unary_exp, "UnaryExpAST");
                 return lower_unary_exp(unary_exp);
             },
-            [&](const MulExpAST::Binary& b) -> IRValue* {
+            [&](const MulExpAST::Binary& binary) -> IRValue* {
                 const auto& mul_exp =
-                    expect_node<MulExpAST>(*b.mul_exp, "MulExpAST");
+                    expect_node<MulExpAST>(*binary.mul_exp, "MulExpAST");
                 const auto& unary_exp =
-                    expect_node<UnaryExpAST>(*b.unary_exp, "UnaryExpAST");
+                    expect_node<UnaryExpAST>(*binary.unary_exp, "UnaryExpAST");
 
                 auto lhs = lower_mul_exp(mul_exp);
                 auto rhs = lower_unary_exp(unary_exp);
-                auto op = ast_op_to_ir_op(b.op);
+                auto op = ast_op_to_ir_op(binary.op);
                 return &current_ctx_->create_block_value<IRBinaryInst>(
                     op, lhs, rhs, get_i32_type(), current_ctx_->next_percent_name());
             }},

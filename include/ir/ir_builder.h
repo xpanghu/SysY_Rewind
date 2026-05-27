@@ -104,7 +104,7 @@ private:
 
     IRFunction* lookup_function(const std::string& name) const;
 
-    // cache: int32_t -> IRConstant*
+    // Non-owning intern cache. IRModule owns each IRConstant created through make_value.
     std::unordered_map<int32_t, IRConstant*> constant_cache_;
 
     // module-scope symbols: global variables, global consts, function

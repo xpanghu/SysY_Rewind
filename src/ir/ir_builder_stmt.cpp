@@ -32,7 +32,11 @@ void RewindIRBuilder::lower_stmt(const StmtAST& ast)
                     ret_value = get_or_create_constant(0, current_ctx_->module());
                 }
 
-                static_cast<void>(current_ctx_->terminate_with_return(ret_value));
+                if (ret_value != nullptr) {
+                    static_cast<void>(current_ctx_->terminate_with_return(*ret_value));
+                } else {
+                    static_cast<void>(current_ctx_->terminate_with_return());
+                }
             },
             [&](const StmtAST::Assign& assign_stmt) {
                 // assign
@@ -63,9 +67,9 @@ void RewindIRBuilder::lower_stmt(const StmtAST& ast)
                 static_cast<void>(lower_exp(exp));
             },
             [&](const StmtAST::SelectStmt& select_stmt) {
-                // if ( cond ) if_stmt else else_stmt , else_stmt may be empty
+                // if ( cond ) then_stmt else else_stmt , else_stmt may be empty
                 const auto& exp = expect_node<ExpAST>(*select_stmt.exp, "ExpAST");
-                const auto& if_stmt = expect_node<StmtAST>(*select_stmt.if_stmt, "StmtAST");
+                const auto& then_stmt = expect_node<StmtAST>(*select_stmt.then_stmt, "StmtAST");
                 const StmtAST* else_stmt =
                     select_stmt.else_stmt
                         ? &expect_node<StmtAST>(*select_stmt.else_stmt, "StmtAST")
@@ -83,25 +87,25 @@ void RewindIRBuilder::lower_stmt(const StmtAST& ast)
 
                 IRBasicBlock* merge_bb = nullptr;
                 if (else_stmt == nullptr) {
-                    merge_bb = &current_ctx_->create_function_block("end");
+                    merge_bb = &current_ctx_->create_function_block("merge");
                 }
 
                 // current_block add branch inst
                 static_cast<void>(current_ctx_->terminate_with_branch(
-                    cond,
+                    *cond,
                     then_bb,
                     *(else_stmt != nullptr ? else_bb : merge_bb)));
 
                 // switch then_bb
                 current_ctx_->set_current_block(then_bb);
-                lower_stmt(if_stmt);
+                lower_stmt(then_stmt);
                 IRBasicBlock* then_fallthrough = current_ctx_->current_block_or_null();
 
                 // check if then_bb terminated
                 // consider example : if ( exp ) return exp;  don't need jump inst
                 if (then_fallthrough != nullptr) {
                     if (merge_bb == nullptr) {
-                        merge_bb = &current_ctx_->create_function_block("end");
+                        merge_bb = &current_ctx_->create_function_block("merge");
                     }
                     current_ctx_->set_current_block(*then_fallthrough);
                     static_cast<void>(current_ctx_->terminate_with_jump(*merge_bb));
@@ -116,7 +120,7 @@ void RewindIRBuilder::lower_stmt(const StmtAST& ast)
                     // check if else_basic_block terminated
                     if (else_fallthrough != nullptr) {
                         if (merge_bb == nullptr) {
-                            merge_bb = &current_ctx_->create_function_block("end");
+                            merge_bb = &current_ctx_->create_function_block("merge");
                         }
                         current_ctx_->set_current_block(*else_fallthrough);
                         static_cast<void>(current_ctx_->terminate_with_jump(*merge_bb));
@@ -151,7 +155,7 @@ void RewindIRBuilder::lower_stmt(const StmtAST& ast)
                 current_ctx_->set_current_block(while_entry);
                 auto* cond = lower_exp(exp);
                 static_cast<void>(current_ctx_->terminate_with_branch(
-                    cond,
+                    *cond,
                     while_body,
                     end));
 

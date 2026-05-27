@@ -285,7 +285,7 @@ public:
 
     struct SelectStmt {
         std::unique_ptr<BaseAST> exp;
-        std::unique_ptr<BaseAST> if_stmt;
+        std::unique_ptr<BaseAST> then_stmt;
         std::unique_ptr<BaseAST> else_stmt;
     };
 

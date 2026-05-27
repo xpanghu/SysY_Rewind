@@ -1,3 +1,4 @@
+#include "cfg_analysis.h"
 #include "ir_verifier.h"
 #include <sstream>
 #include <stdexcept>
@@ -207,6 +208,88 @@ bool IRVerifier::verify(const IRModule& module)
             }
         }
 
+        if (!function->basic_blocks_.empty()
+            && function->basic_blocks_.front() != nullptr
+            && !function->basic_blocks_.front()->params_.empty()) {
+            error("entry block " + function->basic_blocks_.front()->name_
+                  + " in @" + function->name_ + " should not have block arguments");
+        }
+
+        for (const auto* block : function->basic_blocks_) {
+            if (block == nullptr) {
+                continue;
+            }
+
+            for (size_t i = 0; i < block->params_.size(); ++i) {
+                const auto* param = block->params_[i];
+                if (param == nullptr) {
+                    error("basic block " + block->name_ + " in @" + function->name_
+                          + " contains null block argument");
+                    continue;
+                }
+
+                if (param->kind_ != IRValueKind::BLOCK_ARG_REF) {
+                    error("basic block " + block->name_ + " argument " + value_name(param)
+                          + " is not BLOCK_ARG_REF");
+                    continue;
+                }
+
+                if (param->type_ == nullptr) {
+                    error("basic block " + block->name_ + " argument " + value_name(param)
+                          + " has null type");
+                }
+
+                const auto* block_arg = param->as<IRBlockArgRef>();
+                if (block_arg->owner_ != block) {
+                    error("basic block " + block->name_ + " argument " + value_name(param)
+                          + " has wrong owner");
+                }
+
+                if (block_arg->index_ != i) {
+                    error("basic block " + block->name_ + " argument " + value_name(param)
+                          + " has wrong index "
+                          + std::to_string(block_arg->index_));
+                }
+            }
+        }
+
+        CFGAnalysis cfg(*function);
+        const auto verify_edge_arguments =
+            [this, &cfg, function](const IRBasicBlock& source,
+                                   const IRBasicBlock* target,
+                                   const std::vector<IRValue*>& args,
+                                   const std::string& edge_name) {
+                if (target == nullptr || !cfg.contains(*target)) {
+                    return;
+                }
+
+                if (args.size() != target->params_.size()) {
+                    error(edge_name + " from " + source.name_ + " to " + target->name_
+                          + " argument count mismatch, expected "
+                          + std::to_string(target->params_.size()) + ", found "
+                          + std::to_string(args.size()) + " in @" + function->name_);
+                }
+
+                for (size_t i = 0; i < args.size() && i < target->params_.size(); ++i) {
+                    const auto* arg = args[i];
+                    const auto* param = target->params_[i];
+                    if (arg == nullptr) {
+                        error(edge_name + " from " + source.name_ + " to " + target->name_
+                              + " has null argument");
+                        continue;
+                    }
+                    if (param == nullptr) {
+                        continue;
+                    }
+                    if (!same_type(arg->type_, param->type_)) {
+                        error(edge_name + " from " + source.name_ + " to " + target->name_
+                              + " argument " + std::to_string(i)
+                              + " type mismatch, expected " + type_name(param->type_)
+                              + ", found " + type_name(arg->type_));
+                    }
+                }
+            };
+
         for (const auto* block : function->basic_blocks_) {
             if (block == nullptr) {
                 continue;
@@ -359,14 +442,24 @@ bool IRVerifier::verify(const IRModule& module)
                     if (!is_i32_value(branch->cond_)) {
                         error("branch condition in " + block->name_ + " must be i32");
                     }
-                    if (blocks.find(branch->if_basic_block_) == blocks.end()) {
+                    if (branch->if_basic_block_ == nullptr
+                        || !cfg.contains(*branch->if_basic_block_)) {
                         error("branch true target in " + block->name_
                               + " does not belong to function @" + function->name_);
                     }
-                    if (blocks.find(branch->else_basic_block_) == blocks.end()) {
+                    if (branch->else_basic_block_ == nullptr
+                        || !cfg.contains(*branch->else_basic_block_)) {
                         error("branch false target in " + block->name_
                               + " does not belong to function @" + function->name_);
                     }
+                    verify_edge_arguments(*block,
+                                          branch->if_basic_block_,
+                                          branch->if_args_,
+                                          "branch true edge");
+                    verify_edge_arguments(*block,
+                                          branch->else_basic_block_,
+                                          branch->else_args_,
+                                          "branch false edge");
                     if (!is_unit_type(branch->type_)) {
                         error("branch instruction must have unit type");
                     }
@@ -374,10 +467,15 @@ bool IRVerifier::verify(const IRModule& module)
                 }
                 case IRValueKind::IR_JUMP: {
                     const auto* jump = inst->as<IRJumpInst>();
-                    if (blocks.find(jump->jump_basic_block_) == blocks.end()) {
+                    if (jump->jump_basic_block_ == nullptr
+                        || !cfg.contains(*jump->jump_basic_block_)) {
                         error("jump target in " + block->name_
                               + " does not belong to function @" + function->name_);
                     }
+                    verify_edge_arguments(*block,
+                                          jump->jump_basic_block_,
+                                          jump->args_,
+                                          "jump edge");
                     if (!is_unit_type(jump->type_)) {
                         error("jump instruction must have unit type");
                     }

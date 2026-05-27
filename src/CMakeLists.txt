@@ -31,6 +31,10 @@ set(IR_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/ir/ir_builder_array_init.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ir/ir_builder_runtime_decls.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ir/ir_builder_stmt.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ir/cfg_analysis.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ir/dominance_analysis.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ir/ir_rewrite.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ir/mem2reg.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ir/ir_type.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ir/ir_text_gen.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ir/ir_verifier.cpp

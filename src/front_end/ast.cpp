@@ -391,9 +391,9 @@ void StmtAST::Dump(std::ostream& out, int indent) const
                 stmt.exp->Dump(out, indent + 4);
                 out << "\n";
             }
-            if (stmt.if_stmt) {
+            if (stmt.then_stmt) {
                 out << ast_dump_detail::indent(indent + 2) << "then:\n";
-                stmt.if_stmt->Dump(out, indent + 4);
+                stmt.then_stmt->Dump(out, indent + 4);
                 out << "\n";
             }
             if (stmt.else_stmt) {

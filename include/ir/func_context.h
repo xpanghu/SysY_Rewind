@@ -206,31 +206,44 @@ public:
         return *value;
     }
 
-    IRReturnInst& terminate_with_return(IRValue* value)
+    IRReturnInst& terminate_with_return()
     {
-        auto& inst = create_block_value<IRReturnInst>(value);
+        auto& inst = create_block_value<IRReturnInst>(nullptr);
         clear_current_block();
         return inst;
     }
 
-    IRBranchInst& terminate_with_branch(IRValue* cond,
+    IRReturnInst& terminate_with_return(IRValue& value)
+    {
+        auto& inst = create_block_value<IRReturnInst>(&value);
+        clear_current_block();
+        return inst;
+    }
+
+    IRBranchInst& terminate_with_branch(IRValue& cond,
                                         IRBasicBlock& if_block,
-                                        IRBasicBlock& else_block)
+                                        IRBasicBlock& else_block,
+                                        std::vector<IRValue*> if_args = {},
+                                        std::vector<IRValue*> else_args = {})
     {
         auto& inst = create_block_value<IRBranchInst>(
-            cond,
+            &cond,
             &if_block,
             &else_block,
-            IRTypeContext::instance().getUnit());
+            IRTypeContext::instance().getUnit(),
+            std::move(if_args),
+            std::move(else_args));
         clear_current_block();
         return inst;
     }
 
-    IRJumpInst& terminate_with_jump(IRBasicBlock& target)
+    IRJumpInst& terminate_with_jump(IRBasicBlock& target,
+                                    std::vector<IRValue*> args = {})
     {
         auto& inst = create_block_value<IRJumpInst>(
             &target,
-            IRTypeContext::instance().getUnit());
+            IRTypeContext::instance().getUnit(),
+            std::move(args));
         clear_current_block();
         return inst;
     }

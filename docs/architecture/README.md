@@ -8,11 +8,18 @@
 
 ## 文档索引
 
-- `module_flow.md`: 当前编译链路的两段式 Mermaid 模块图，分别描述输入到 AST、AST 到 IR/RISC-V 的数据流。
-- `riscv_backend_design.md`: RISC-V 后端组件边界、IR 指令支持表、最小 Machine IR 演进方案和后端重构时的最小验证方式。
+- `target_architecture_and_tasks.md`: 项目长期方向 overview，记录目标结构、模块交互和 A1-A13 的大致工作内容。
+- `task_progress.md`: 架构任务推进顺序和执行记录，记录当前下一步和已经完成的任务。
+- `riscv_backend_design.md`: RISC-V 后端专项设计，记录组件边界、IR 指令支持表、最小 Machine IR 演进方案和后端重构时的最小验证方式。
+- `ssa_mem2reg_design.md`: A11 专项设计，说明 Rewind IR 如何采用 basic block arguments 表达 SSA 合流，以及 `mem2reg` 需要补齐的 IR、分析和后端基础设施。
 - `support_matrix.md`: 当前语法能力跨 parser/AST、lowering、IR text、RISC-V/baremetal 的重构支持边界表。
 - `test_artifact_layout.md`: A8/A9 目录整理边界，说明测试资产、脚本入口、临时产物和 baremetal 产物各自放在哪里。
-- `target_architecture_and_tasks.md`: 建议的优化架构、模块交互方式和长期任务拆分。
+
+## 记录边界
+
+- overview 文档只回答“项目往哪里走”。
+- 专项设计文档回答“某一项任务具体怎么做”。
+- 任务推进文档回答“现在做到哪里，下一步做什么”。
 
 ## 工作方式
 

@@ -35,7 +35,7 @@ UID := $(shell id -u)
 GID := $(shell id -g)
 PWD := $(shell pwd)
 
-.PHONY: all config build clean clean-tmp clean-riscv run-ast run-koopa run-riscv sysyrt riscv-asm riscv-elf run-riscv-baremetal regression-smoke semantic-smoke ir-verifier-smoke
+.PHONY: all config build clean clean-tmp clean-riscv run-ast run-koopa run-riscv sysyrt riscv-asm riscv-elf run-riscv-baremetal regression-smoke semantic-smoke ir-verifier-smoke cfg-analysis-smoke dominance-analysis-smoke ir-rewrite-smoke mem2reg-smoke
 
 all: build
 
@@ -114,3 +114,15 @@ semantic-smoke:
 
 ir-verifier-smoke:
 	./scripts/run_ir_verifier_smoke.sh
+
+cfg-analysis-smoke:
+	./scripts/run_cfg_analysis_smoke.sh
+
+dominance-analysis-smoke:
+	./scripts/run_dominance_analysis_smoke.sh
+
+ir-rewrite-smoke:
+	./scripts/run_ir_rewrite_smoke.sh
+
+mem2reg-smoke:
+	./scripts/run_mem2reg_smoke.sh

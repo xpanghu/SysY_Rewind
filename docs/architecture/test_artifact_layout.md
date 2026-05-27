@@ -17,6 +17,10 @@ tmp/                      # Git 忽略的临时输出
   regression-smoke/       # 回归 smoke 输出
   semantic-smoke/         # 语义 smoke 输出
   ir-verifier-smoke/      # IR verifier smoke 输出
+  cfg-analysis-smoke/     # CFG analysis smoke 输出
+  dominance-analysis-smoke/ # dominance analysis smoke 输出
+  ir-rewrite-smoke/       # IR rewrite smoke 输出
+  mem2reg-smoke/          # Mem2Reg pass smoke 输出和可视化 IR 文本
 
 build/                    # 构建树和 baremetal runtime 中间产物
 riscv32-baremetal/        # baremetal 汇编与 ELF 最终产物
@@ -67,6 +71,10 @@ riscv32-baremetal/        # baremetal 汇编与 ELF 最终产物
 - [x] `make regression-smoke`
 - [x] `make semantic-smoke`
 - [x] `make ir-verifier-smoke`
+- [x] `make cfg-analysis-smoke`
+- [x] `make dominance-analysis-smoke`
+- [x] `make ir-rewrite-smoke`
+- [x] `make mem2reg-smoke`
 - [x] 工具链可用时，使用 `tests/fixtures/awesome-sysy/lisp-simple.in` 跑一次 baremetal `lisp.c`。
 
 ## 后续扩展
