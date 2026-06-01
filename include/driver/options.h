@@ -11,6 +11,7 @@ namespace sysy::driver
 enum class CompileMode {
     Ast,
     Koopa,
+    Ssa,
     Riscv,
 };
 
@@ -30,4 +31,3 @@ void print_usage(std::ostream& out, std::string_view program_name);
 OptionParseResult parse_options(int argc, const char* const argv[], std::ostream& err);
 
 } // namespace sysy::driver
-

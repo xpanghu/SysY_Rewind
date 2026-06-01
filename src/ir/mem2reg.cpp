@@ -5,6 +5,7 @@
 #include "ir_rewrite.h"
 
 #include <algorithm>
+#include <cctype>
 #include <memory>
 #include <string>
 #include <unordered_map>
@@ -66,8 +67,13 @@ IRAllocInst* as_candidate_alloc(IRValue* value,
 std::string make_block_param_name(const IRValue& alloc, size_t index)
 {
     std::string base = alloc.name_;
+    while (!base.empty() && (base.front() == '@' || base.front() == '%')) {
+        base.erase(base.begin());
+    }
+
     for (auto& ch : base) {
-        if (ch == '@' || ch == '%') {
+        const auto uch = static_cast<unsigned char>(ch);
+        if (!std::isalnum(uch) && ch != '_') {
             ch = '_';
         }
     }
@@ -76,7 +82,7 @@ std::string make_block_param_name(const IRValue& alloc, size_t index)
         base = "alloc";
     }
 
-    return "%mem2reg" + base + "_" + std::to_string(index);
+    return "%" + base + "_phi_" + std::to_string(index);
 }
 
 std::vector<std::unique_ptr<AllocaInfo>>

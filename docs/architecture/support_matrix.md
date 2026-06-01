@@ -69,6 +69,7 @@
 
 ```bash
 cmake --build build -j4
+make ssa-smoke
 docker run -i --rm -v /Users/qingxuliang/project/compiler/SysY:/root/compiler maxxing/compiler-dev autotest -koopa -s lv9 /root/compiler
 docker run -i --rm -v /Users/qingxuliang/project/compiler/SysY:/root/compiler maxxing/compiler-dev autotest -riscv -s lv9 /root/compiler
 docker run -i --rm -v /Users/qingxuliang/project/compiler/SysY:/root/compiler maxxing/compiler-dev autotest -koopa -s perf /root/compiler

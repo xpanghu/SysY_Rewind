@@ -37,6 +37,9 @@ void FrameLayout::build(const rewind_ir::IRFunction& func)
 
     // first traversal to calculate frame payload size
     for (const auto* block : func.basic_blocks_) {
+        for (const auto* param : block->params_) {
+            payload_size += data_layout_.stack_storage_size(*param);
+        }
         for (const auto* inst : block->insts_) {
             if (inst->kind_ == rewind_ir::IRValueKind::IR_CALL) {
                 const auto* call_inst = inst->as<rewind_ir::IRCallInst>();
@@ -60,6 +63,13 @@ void FrameLayout::build(const rewind_ir::IRFunction& func)
     next_slot_offset_ = outgoing_arg_size_;
     // second traversal to ensure local objects and instruction results have stable slots
     for (const auto* block : func.basic_blocks_) {
+        for (const auto* param : block->params_) {
+            const auto storage_size = data_layout_.stack_storage_size(*param);
+            if (storage_size > 0) {
+                value_slots_.emplace(param, next_slot_offset_);
+                next_slot_offset_ += storage_size;
+            }
+        }
         for (const auto* inst : block->insts_) {
             const auto storage_size = data_layout_.stack_storage_size(*inst);
 

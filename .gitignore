@@ -2,10 +2,9 @@
 build/
 tmp/
 riscv32-baremetal/
-.clangd
-maze.png
-baremetal_riscv_usage.md
+tests/
 docs/*
-!docs/README.md
 !docs/architecture/
 !docs/architecture/**
+docs/project/
+docs/prject/**

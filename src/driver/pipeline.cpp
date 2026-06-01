@@ -3,6 +3,7 @@
 #include "ir_builder.h"
 #include "ir_text_gen.h"
 #include "ir_verifier.h"
+#include "mem2reg.h"
 #include "pass_manager.h"
 #include "riscv.h"
 #include <cstdio>
@@ -110,6 +111,9 @@ int run_compiler(const CompilerOptions& options, std::ostream&)
 
     rewind_ir::IRPassManager pass_manager;
     pass_manager.add_module_pass(std::make_unique<rewind_ir::IRNoOpModulePass>());
+    if (options.mode == CompileMode::Ssa) {
+        pass_manager.add_module_pass(std::make_unique<rewind_ir::Mem2RegPass>());
+    }
     pass_manager.run(module);
 
     rewind_ir::verify_or_throw(module);
@@ -118,6 +122,14 @@ int run_compiler(const CompilerOptions& options, std::ostream&)
     case CompileMode::Ast:
         break;
     case CompileMode::Koopa: {
+        rewind_ir::IRTextGen ir_gen;
+        const auto gen_ret = ir_gen.emit(module, out);
+        if (gen_ret != rewind_ir::IRErrorCode::SUCCESS) {
+            throw std::runtime_error("IRTextGen::emit failed: " + std::string(ir_gen.last_error()));
+        }
+        return 0;
+    }
+    case CompileMode::Ssa: {
         rewind_ir::IRTextGen ir_gen;
         const auto gen_ret = ir_gen.emit(module, out);
         if (gen_ret != rewind_ir::IRErrorCode::SUCCESS) {

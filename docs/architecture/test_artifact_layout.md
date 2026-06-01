@@ -21,6 +21,7 @@ tmp/                      # Git 忽略的临时输出
   dominance-analysis-smoke/ # dominance analysis smoke 输出
   ir-rewrite-smoke/       # IR rewrite smoke 输出
   mem2reg-smoke/          # Mem2Reg pass smoke 输出和可视化 IR 文本
+  ssa-smoke/              # -ssa compile mode 的真实前端链路输出
 
 build/                    # 构建树和 baremetal runtime 中间产物
 riscv32-baremetal/        # baremetal 汇编与 ELF 最终产物
@@ -75,6 +76,7 @@ riscv32-baremetal/        # baremetal 汇编与 ELF 最终产物
 - [x] `make dominance-analysis-smoke`
 - [x] `make ir-rewrite-smoke`
 - [x] `make mem2reg-smoke`
+- [x] `make ssa-smoke`
 - [x] 工具链可用时，使用 `tests/fixtures/awesome-sysy/lisp-simple.in` 跑一次 baremetal `lisp.c`。
 
 ## 后续扩展

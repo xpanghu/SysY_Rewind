@@ -35,7 +35,7 @@ UID := $(shell id -u)
 GID := $(shell id -g)
 PWD := $(shell pwd)
 
-.PHONY: all config build clean clean-tmp clean-riscv run-ast run-koopa run-riscv sysyrt riscv-asm riscv-elf run-riscv-baremetal regression-smoke semantic-smoke ir-verifier-smoke cfg-analysis-smoke dominance-analysis-smoke ir-rewrite-smoke mem2reg-smoke
+.PHONY: all config build clean clean-tmp clean-riscv run-ast run-koopa run-riscv sysyrt riscv-asm riscv-elf run-riscv-baremetal regression-smoke semantic-smoke ir-verifier-smoke cfg-analysis-smoke dominance-analysis-smoke ir-rewrite-smoke mem2reg-smoke ssa-smoke machine-ir-smoke
 
 all: build
 
@@ -67,6 +67,8 @@ run-koopa: $(COMPILER) | $(MANUAL_OUT_DIR)
 	$(COMPILER) -koopa $(SIMPLE_TEST) -o $(MANUAL_OUT_DIR)/hello.koopa
 run-riscv: $(COMPILER) | $(MANUAL_OUT_DIR)
 	$(COMPILER) -riscv $(SIMPLE_TEST) -o $(MANUAL_OUT_DIR)/hello.s
+run-ssa: $(COMPILER) | $(MANUAL_OUT_DIR)
+	$(COMPILER) -ssa $(SIMPLE_TEST) -o $(MANUAL_OUT_DIR)/hello.ssa
 
 $(SYSYRT_BUILD_DIR):
 	mkdir -p $@
@@ -126,3 +128,9 @@ ir-rewrite-smoke:
 
 mem2reg-smoke:
 	./scripts/run_mem2reg_smoke.sh
+
+ssa-smoke:
+	./scripts/run_ssa_smoke.sh
+
+machine-ir-smoke:
+	./scripts/run_machine_ir_smoke.sh

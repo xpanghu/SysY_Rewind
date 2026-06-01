@@ -16,6 +16,9 @@ std::optional<CompileMode> parse_mode(std::string_view mode)
     if (mode == "-koopa") {
         return CompileMode::Koopa;
     }
+    if (mode == "-ssa") {
+        return CompileMode::Ssa;
+    }
     if (mode == "-riscv") {
         return CompileMode::Riscv;
     }
@@ -36,6 +39,8 @@ std::string_view mode_name(CompileMode mode)
         return "-ast";
     case CompileMode::Koopa:
         return "-koopa";
+    case CompileMode::Ssa:
+        return "-ssa";
     case CompileMode::Riscv:
         return "-riscv";
     }
@@ -44,7 +49,7 @@ std::string_view mode_name(CompileMode mode)
 
 void print_usage(std::ostream& out, std::string_view program_name)
 {
-    out << "Usage: " << program_name << " <-ast|-koopa|-riscv> <input.sysy> -o <output>\n";
+    out << "Usage: " << program_name << " <-ast|-koopa|-ssa|-riscv> <input.sysy> -o <output>\n";
 }
 
 OptionParseResult parse_options(int argc, const char* const argv[], std::ostream& err)

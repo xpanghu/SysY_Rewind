@@ -9,7 +9,7 @@
 - `ir_design.md`: 说明 Rewind IR 在项目中的位置、对象关系和 lowering 上下文。
 - `backend_design.md`: 说明 RISC-V 后端、栈帧、调用约定和指令翻译。
 - `compilation_flow.md`: 从一份 SysY 源码出发，说明如何生成 AST、IR、RISC-V 汇编和 baremetal 产物。
-- `个人记录/`: 个人复盘记录，按 `前端.md`、`中间表示.md`、`后端.md` 维护更细的面试讲述和自我理解。
+- `个人记录/`: 个人复盘记录，按 `前端.md`、`中间表示.md`、`SSA.md`、`后端.md` 维护更细的面试讲述和自我理解。
 
 ## 面试讲解路径
 

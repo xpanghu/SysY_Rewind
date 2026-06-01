@@ -316,8 +316,9 @@ int main(int argc, char** argv)
         require_not_contains(text, "store ", "if/else");
         require_contains(text, "jump %merge(1)", "if/else");
         require_contains(text, "jump %merge(2)", "if/else");
-        require_contains(text, "%merge(%mem2reg_x_0: i32):", "if/else");
-        require_contains(text, "ret %mem2reg_x_0", "if/else");
+        require_contains(text, "%merge(%x_phi_0: i32):", "if/else");
+        require_contains(text, "ret %x_phi_0", "if/else");
+        require_not_contains(text, "mem2reg", "if/else");
     }
 
     {
@@ -327,10 +328,11 @@ int main(int argc, char** argv)
         require_not_contains(text, "alloc i32", "while");
         require_not_contains(text, "load ", "while");
         require_not_contains(text, "store ", "while");
-        require_contains(text, "%while_entry(%mem2reg_i_0: i32):", "while");
+        require_contains(text, "%while_entry(%i_phi_0: i32):", "while");
         require_contains(text, "jump %while_entry(0)", "while");
         require_contains(text, "jump %while_entry(%next)", "while");
-        require_contains(text, "ret %mem2reg_i_0", "while");
+        require_contains(text, "ret %i_phi_0", "while");
+        require_not_contains(text, "mem2reg", "while");
     }
 
     {
@@ -340,12 +342,12 @@ int main(int argc, char** argv)
         require_not_contains(text, "alloc i32", "two variable if/else");
         require_not_contains(text, "load ", "two variable if/else");
         require_not_contains(text, "store ", "two variable if/else");
-        require_contains(text, "%merge(%mem2reg_x_0: i32, %mem2reg_y_1: i32):",
+        require_contains(text, "%merge(%x_phi_0: i32, %y_phi_1: i32):",
                          "two variable if/else");
         require_contains(text, "jump %merge(1, 10)", "two variable if/else");
         require_contains(text, "jump %merge(2, 20)", "two variable if/else");
-        require_contains(text, "%sum = add %mem2reg_x_0, %mem2reg_y_1",
-                         "two variable if/else");
+        require_contains(text, "%sum = add %x_phi_0, %y_phi_1", "two variable if/else");
+        require_not_contains(text, "mem2reg", "two variable if/else");
     }
 
     {

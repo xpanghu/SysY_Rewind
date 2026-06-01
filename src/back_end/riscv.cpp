@@ -1,5 +1,6 @@
 #include <cstdint>
 #include "riscv.h"
+#include "machine_asm_printer.h"
 #include "ir_type.h"
 #include "rewind_ir.h"
 #include <algorithm>
@@ -670,8 +671,8 @@ void IREmitter::emit_stack_store(Register rs, int32_t offset, Register scratch)
 
 void emit_module(const rewind_ir::IRModule& module, std::ostream& out)
 {
-    IREmitter emitter(out);
-    emitter.emit_module(module);
+    MachineAsmPrinter printer(out);
+    printer.emit_module(module);
 }
 
 } // namespace riscv

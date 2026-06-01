@@ -17,8 +17,8 @@ A11 不负责：
 - 把所有 AST lowering 改成直接生成 SSA。
 - 提升数组、数组形参、指针地址计算和逃逸地址。
 - 引入通用优化框架之外的大量优化 pass。
-- 借 A11 完成 Machine IR 到 RISC-V asm、寄存器分配或 QEMU 运行闭环。A11.6 只规划最小
-  Machine IR 过渡层，用来验证 SSA block arguments 的后端前置 lowering。
+- 借 A11 完成 Machine IR、RISC-V asm、寄存器分配或 QEMU 运行闭环。这些后端任务统一归入
+  A13。
 
 ## 表示方案
 
@@ -72,7 +72,7 @@ flowchart LR
 
 - 给合流 block 添加 block arguments。
 - 给 `jump` / `branch` 的 successor edge 添加 edge arguments。
-- 让 verifier、printer、pass 和 backend 都认识这套参数流。
+- 让 verifier、printer 和 pass 都认识这套参数流；后端承接放到 A13。
 
 ## 当前基础设施缺口
 
@@ -89,7 +89,7 @@ block-argument SSA。
 | CFG analysis | 没有稳定 predecessor/successor 访问层 | 从 terminator 建立 CFG 视图 |
 | Dominance analysis | 尚未实现 | 提供 dominator tree 与 dominance frontier |
 | Pass mutation | 当前 pass 主要可遍历 IR | 支持遍历/替换 operand、删除可消去的 alloc/load/store |
-| Backend lowering | 分支和跳转只输出 label | 降低 block args，保证 `-riscv` 仍可运行 |
+| Backend lowering | 分支和跳转只输出 label | 不属于 A11，后续在 A13 的 Machine IR / RISC-V 链路中承接 |
 
 ## A11 准备项
 
@@ -142,18 +142,6 @@ pass 手写一套指令字段替换逻辑：
 - 允许 `IRModule` 继续持有已经不再挂在 block 上的 value，先不引入复杂 value 回收。
 
 如果这层缺失，后续 A12 的常量传播、DCE 等 pass 会重复碰到同一类问题。
-
-### 5. 先给后端留出 Machine IR 过渡层
-
-block arguments 是 SSA 表示，目标汇编仍然需要具体传值动作。A11 第一版不把这件事直接塞进
-旧 `riscv.cpp`，而是先下降到最小 Machine IR：
-
-- block parameter 变成 Machine IR 中的虚拟寄存器或 pseudo operand。
-- `jump target(args)` 和 `branch` edge args 变成 edge copy / pseudo copy。
-- MachineVerifier 先检查 copy 数量、目标 block 和 terminator 结构。
-
-这让 A11 可以先验证 SSA 语义和 de-SSA 前置形态，不和 A13 的寄存器分配、最终汇编输出、
-QEMU 运行闭环耦合。
 
 ## 分阶段方案
 
@@ -270,9 +258,11 @@ basic block；AST lowering 侧的 `FuncContext` 仍默认构造空 edge args。
 目标：把局部、非逃逸、标量 `alloc i32` 从内存形式提升成 SSA value。
 
 状态：第一阶段已完成。当前新增 `Mem2RegPass`，以可选 `IRModulePass` 形式接入
-`IRPassManager`；它不会默认进入 driver 主链路，因此现有 `-koopa` / `-riscv` 输出仍保持
-memory-form IR。第一版只提升可证明安全的局部 `alloc i32`，并通过手工 IR smoke 验证
-single block、`if/else` 合流和 `while` 回边三类形状。
+`IRPassManager`；它不会默认进入 `-koopa` / `-riscv` 主链路，因此这两个模式输出仍保持
+memory-form IR。为了测试真实前端链路，driver 额外提供 `-ssa` compile mode：输入仍然是
+SysY 源码，流程是 `parse -> AST -> memory-form IR -> Mem2RegPass -> SSA IR text`。第一版只提升
+可证明安全的局部 `alloc i32`，并通过 pass smoke 与真实 SysY smoke 验证 single block、
+`if/else` 合流和 `while` 回边三类形状。
 
 第一版 promotion 条件：
 
@@ -321,32 +311,22 @@ single block、`if/else` 合流和 `while` 回边三类形状。
 
 - 复杂场景当前覆盖两个变量同时在同一个 merge block 合流、`while` header 的 entry/backedge
   两路 incoming value，以及未初始化读取和 `getptr` 派生地址这类不应被提升的情况。
+- `make ssa-smoke` 使用真实 SysY 源文件验证 `-ssa` 模式，覆盖 `if/else` 和 `while`：
+  输出会落到 `tmp/ssa-smoke/*.ssa.koopa`，并检查生成结果中已经没有被提升变量的
+  `alloc i32` / `load` / `store`。
 
 限制：
 
-- 当前 pass 仍是可选 pass，尚未默认启用到 `src/driver/pipeline.cpp`。
+- 当前 pass 仍是可选 pass，只在 `-ssa` 测试/验证模式中启用，不影响默认 `-koopa` / `-riscv`。
 - 当前 RISC-V backend 尚未 lowering block arguments，因此默认 `-riscv` 不运行 mem2reg。
 
-### A11.6 接入 Machine IR 过渡层
+## 后端承接边界
 
-目标：让启用 mem2reg 后的 block arguments 不只停留在 IR text 中，而是能先下降到一层最小
-Machine IR，并通过 Machine IR printer/verifier 验证结构正确。这个阶段暂时不要求把新
-Machine IR 完整输出为可运行 RISC-V 汇编。
+A11 只负责让 Rewind IR 能表达并生成 SSA block arguments。启用 `mem2reg` 后，block
+arguments 仍然停留在 IR text / pass 验证层，不要求当前 `-riscv` 默认后端理解它们。
 
-工作内容：
-
-- 定义最小 `MachineFunction`、`MachineBasicBlock`、`MachineInstr`、`MachineOperand`。
-- 将 SSA block arguments 转换为 Machine IR 中的显式 edge copy 或 pseudo copy。
-- 为 Machine IR 增加 printer，便于用 golden/smoke 检查。
-- 为 Machine IR 增加 verifier，检查 basic block、terminator、successor 和 copy 参数数量。
-- 准备手工 SSA IR 到 Machine IR 的 smoke，覆盖 `if/else` 和 loop 合流。
-
-验收：
-
-- 打开 mem2reg 后 `-koopa` 能通过基础回归。
-- SSA Rewind IR 能稳定转换为 Machine IR，并通过 MachineVerifier。
-- 旧 `-riscv` 路径不默认启用 mem2reg，继续保持现有 smoke 稳定。
-- Machine IR 到 RISC-V asm、寄存器分配和 QEMU 闭环放到 A13 继续推进。
+SSA IR 到 Machine IR、edge-copy / parallel-copy、栈帧、序言收尾、MachineAsmPrinter 和
+RISC-V asm 输出统一归入 A13，并在 `docs/architecture/riscv_backend_design.md` 中维护。
 
 ## 建议推进顺序
 
@@ -356,10 +336,9 @@ Machine IR 完整输出为可运行 RISC-V 汇编。
 2. A11.2 和 A11.3 建立 CFG 与 dominance 分析。
 3. A11.4 补 IR rewrite 接口，再开始写会删除/替换 value 的 pass。
 4. A11.5 在 `IRPassManager` 中接入可控的标量 `Mem2RegPass`。
-5. A11.6 补 backend edge argument lowering 后，再把 mem2reg 纳入默认可验证链路。
 
-如果实现过程中希望更早验证 pass，可以先让 `Mem2RegPass` 只通过手工 IR test 和 `-koopa`
-验证，不要在 backend 尚未理解 block arguments 时默认作用于 `-riscv`。
+当前 `-ssa` 已经提供真实 SysY 输入到 SSA IR text 的验证入口；在 A13 后端 Machine IR 链路
+没有承接 block arguments 前，不要让 `Mem2RegPass` 默认作用于 `-riscv`。
 
 ## 验证计划
 
@@ -367,9 +346,10 @@ A11 每阶段都要保留已有最小链路：
 
 - `cmake --build build -j4`
 - `make ir-verifier-smoke`
+- `make ssa-smoke`
 - `make regression-smoke`
 
-进入 A11.5/A11.6 后，至少补以下回归形状：
+进入 A11.5 后，至少补以下回归形状：
 
 - 单 block 标量变量：不需要 block argument。
 - `if/else` 两侧 store，merge 后 load。
@@ -398,4 +378,4 @@ A11 完成时应满足：
 2. CFG、dominance 与 IR rewrite 基础设施可复用。
 3. `Mem2RegPass` 能提升第一版 promotable scalar alloc。
 4. verifier 能检查 block params 与 edge args 的关键结构/类型契约。
-5. IR text 与 RISC-V backend 都能承接默认启用后的 mem2reg 输出。
+5. 后端承接方案已经在 A13 文档中明确，不混入 A11 实现范围。

@@ -10,7 +10,7 @@
 
 - `target_architecture_and_tasks.md`: 项目长期方向 overview，记录目标结构、模块交互和 A1-A13 的大致工作内容。
 - `task_progress.md`: 架构任务推进顺序和执行记录，记录当前下一步和已经完成的任务。
-- `riscv_backend_design.md`: RISC-V 后端专项设计，记录组件边界、IR 指令支持表、最小 Machine IR 演进方案和后端重构时的最小验证方式。
+- `riscv_backend_design.md`: RISC-V 后端专项设计，记录组件边界、IR 指令支持表、A13 Machine IR 演进方案和后端重构时的最小验证方式。
 - `ssa_mem2reg_design.md`: A11 专项设计，说明 Rewind IR 如何采用 basic block arguments 表达 SSA 合流，以及 `mem2reg` 需要补齐的 IR、分析和后端基础设施。
 - `support_matrix.md`: 当前语法能力跨 parser/AST、lowering、IR text、RISC-V/baremetal 的重构支持边界表。
 - `test_artifact_layout.md`: A8/A9 目录整理边界，说明测试资产、脚本入口、临时产物和 baremetal 产物各自放在哪里。

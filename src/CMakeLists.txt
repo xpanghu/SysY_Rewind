@@ -47,6 +47,10 @@ set(BACKEND_SRCS
     ${CMAKE_CURRENT_SOURCE_DIR}/back_end/calling_convention.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/back_end/data_layout.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/back_end/frame_layout.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/back_end/machine_ir.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/back_end/machine_asm_printer.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/back_end/machine_verifier.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/back_end/instruction_selector.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/back_end/riscv.cpp
 )
 
