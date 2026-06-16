@@ -71,9 +71,7 @@ void RewindIRBuilder::lower_stmt(const StmtAST& ast)
                 const auto& exp = expect_node<ExpAST>(*select_stmt.exp, "ExpAST");
                 const auto& then_stmt = expect_node<StmtAST>(*select_stmt.then_stmt, "StmtAST");
                 const StmtAST* else_stmt =
-                    select_stmt.else_stmt
-                        ? &expect_node<StmtAST>(*select_stmt.else_stmt, "StmtAST")
-                        : nullptr;
+                    select_stmt.else_stmt ? &expect_node<StmtAST>(*select_stmt.else_stmt, "StmtAST") : nullptr;
 
                 // condition value
                 auto* cond = lower_exp(exp);
@@ -188,8 +186,7 @@ void RewindIRBuilder::lower_stmt(const StmtAST& ast)
                 }
                 case StmtAST::LoopControlStmt::Kind::Continue: {
                     semantic::require_loop_control_inside_loop(current_ctx_->in_loop(), "continue");
-                    current_ctx_->terminate_with_jump(
-                        *current_ctx_->current_loop().continue_target);
+                    current_ctx_->terminate_with_jump(*current_ctx_->current_loop().continue_target);
                     break;
                 }
                 }

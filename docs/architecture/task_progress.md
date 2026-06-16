@@ -43,12 +43,12 @@
 29. [x] A13.6 prologue / epilogue insertion。
 30. [x] A13.7 MachineAsmPrinter -> AsmWriter -> RISC-V asm。
 31. [x] A13.8 Machine IR smoke / RISC-V smoke。
+32. [x] A13.9 删除历史 `IREmitter` 栈式后端实现。
 
 后续建议推进：
 
 1. [ ] A12 基础 IR 优化 Pass。
 2. [ ] A13 后续寄存器分配、peephole、block placement、instruction scheduling。
-3. [ ] 逐步清理 `riscv.cpp` 中历史 `IREmitter`，避免长期保留两套后端实现。
 
 推进原则：
 
@@ -84,3 +84,4 @@
 - 2026-05-28: 为 A11.5 补充真实前端链路验证入口。新增 `-ssa` compile mode，真实流程为 `SysY source -> AST -> memory-form IR -> Mem2RegPass -> SSA IR text`；新增 `scripts/run_ssa_smoke.sh` 和 `make ssa-smoke`，覆盖 `if/else` 合流与 `while` 回边，并检查 promoted 标量变量不再残留 `alloc i32` / `load` / `store`。`-koopa` 和 `-riscv` 默认链路不启用 mem2reg。
 - 2026-06-01: 统一后端任务边界。A11 明确停在 SSA/mem2reg 和 `-ssa` 验证；Machine IR、InstructionSelector、stack-backed frame layout、prologue/epilogue、MachineAsmPrinter、AsmWriter 到 RISC-V asm 的链路统一归入 A13。A13 第一阶段目标是可运行的 Machine IR MVP，寄存器分配、peephole、block placement 和 instruction scheduling 作为后续阶段。
 - 2026-06-01: 完成 A13 第一阶段。新增 Machine IR core、`MachineFrame`、`InstructionSelector`、`MachineVerifier`、`MachineAsmPrinter` 和 `machine-ir-smoke`；默认 `-riscv` 改为 `Rewind IR -> InstructionSelector -> Machine IR -> MachineVerifier -> MachineAsmPrinter -> AsmWriter -> RISC-V asm`。第一阶段仍采用 stack-backed 策略，长期值保存在栈槽中，scratch physical registers 只用于 materialize。验证：`make machine-ir-smoke`、`make regression-smoke`、`docker run -i --rm -v /Users/qingxuliang/project/compiler/SysY:/root/compiler maxxing/compiler-dev autotest -riscv -s perf /root/compiler`。
+- 2026-06-02: 完成 A13 后端清理。删除 `include/back_end/riscv.h` 中的历史 `IREmitter` 声明，并将 `src/back_end/riscv.cpp` 收敛为只调用 `MachineAsmPrinter::emit_module` 的薄入口；当前后端不再保留两套 RISC-V lowering。

@@ -226,6 +226,7 @@ void DominanceAnalysis::compute_dominance_frontier()
             continue;
         }
 
+
         for (const auto* predecessor : cfg_->predecessors(*block)) {
             if (predecessor == nullptr || !cfg_->is_reachable(*predecessor)) {
                 continue;

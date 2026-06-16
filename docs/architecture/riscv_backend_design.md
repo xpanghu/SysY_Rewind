@@ -17,8 +17,7 @@
 | `InstructionSelector` | `include/back_end/instruction_selector.h`, `src/back_end/instruction_selector.cpp` | 遍历 Rewind IR function/basic block，并把单条 IR 指令 lowering 到 stack-backed Machine IR |
 | `Machine IR` | `include/back_end/machine_ir.h`, `src/back_end/machine_ir.cpp` | 表示 MachineFunction、MachineBasicBlock、MachineInstr、MachineOperand 和 MachineFrame |
 | `MachineVerifier` | `include/back_end/machine_verifier.h`, `src/back_end/machine_verifier.cpp` | 检查 Machine IR block 是否有 terminator 等第一阶段结构约束 |
-| `MachineAsmPrinter` | `include/back_end/machine_asm_printer.h`, `src/back_end/machine_asm_printer.cpp` | 调用 `AsmWriter` 输出全局数据和 Machine IR 对应的 RISC-V/GAS 汇编文本 |
-| `IREmitter` | `include/back_end/riscv.h`, `src/back_end/riscv.cpp` | 历史栈式后端实现仍保留在文件中；默认 `emit_module` 已切到 Machine IR 路径 |
+| `RISC-V backend entry` | `include/back_end/riscv.h`, `src/back_end/riscv.cpp` | 对 driver 暴露 `emit_module`，内部只调用 `MachineAsmPrinter`，不再保留历史栈式 `IREmitter` |
 
 ## IR 指令支持表
 
@@ -55,7 +54,7 @@ Rewind IR
   -> RISC-V asm
 ```
 
-历史 `IREmitter` 仍保留在 `riscv.cpp` 中，作为对照和逐步清理对象；默认 `-riscv` 输出已经通过 Machine IR 路径生成。
+`riscv.cpp` 现在只是一个很薄的入口文件；默认 `-riscv` 输出只通过 Machine IR 路径生成。
 
 A13 统一承接后端 Machine IR 演进。长期目标不是复刻 LLVM/GCC 的完整 Machine SSA，而是先引入一条可运行、可验证、可继续扩展的后端链路：
 
@@ -78,7 +77,7 @@ Rewind IR
 - 在没有 RA 前，为需要落地的 virtual register 分配 stack home slot。
 - `Prologue/Epilogue` 负责最终栈帧开辟、`ra` 保存恢复和返回路径收尾。
 - `MachineAsmPrinter` 把 Machine IR 转成 `AsmWriter` 调用，输出 RISC-V/GAS 汇编文本。
-- 保留旧 `IREmitter` / `riscv.cpp` fallback，直到 Machine IR 路径通过最小回归。
+- 历史 `IREmitter` 已删除，`riscv.cpp` 只保留后端入口函数。
 
 第一阶段明确暂缓：
 
@@ -95,7 +94,6 @@ Rewind IR
 ```text
 include/back_end/
   machine_ir.h              # MachineFunction / MachineBasicBlock / MachineInstr / MachineOperand
-  machine_opcode.h          # RISC-V 机器指令枚举
   instruction_selector.h    # Rewind IR -> Machine IR
   machine_asm_printer.h     # Machine IR -> AsmWriter
   machine_verifier.h        # 检查 Machine IR 合法性
@@ -106,7 +104,6 @@ src/back_end/
   instruction_selector.cpp
   machine_asm_printer.cpp
   machine_verifier.cpp
-  machine_frame.cpp
 ```
 
 可以先不创建 `MachineModule`。全局变量目前直接由后端输出 `.data` 已经够用，第一阶段只把函数体 lowering 成 `MachineFunction`。
@@ -119,7 +116,7 @@ src/back_end/
 | `CallingConvention` | 复用并逐步迁移 | 函数参数、返回值、caller outgoing args 仍需要遵守 RISC-V ABI |
 | `FrameLayout` | 复用概念，必要时拆出 `MachineFrame` | 当前 `FrameLayout` 面向 Rewind IR value 栈槽；Machine IR 需要同时管理 stack home、spill/home slot、saved registers 和 outgoing args |
 | `AsmWriter` | 继续作为最终文本输出层 | `MachineAsmPrinter` 不直接拼字符串，而是调用 `AsmWriter` 输出 GAS 风格汇编 |
-| `IREmitter` / `riscv.cpp` | 保持 fallback，逐步替换 | Machine IR 路径稳定前，旧栈式后端继续保证 `-riscv` 回归稳定 |
+| `riscv.cpp` | 只保留薄入口 | driver 继续调用 `riscv::emit_module`，实际后端实现集中在 Machine IR 相关组件中 |
 
 这个边界很重要：A13 第一阶段不是一次性做完整优化后端，而是先把 **Rewind IR -> Machine IR -> stack-backed RISC-V asm** 路径打通。
 
@@ -261,7 +258,7 @@ SW   %v3, frame[8]
 4. 实现 Machine verifier / printer。
 5. 实现 stack-backed frame layout 和 prologue/epilogue insertion。
 6. 实现 `MachineAsmPrinter -> AsmWriter -> RISC-V asm`。
-7. 保留旧后端 fallback，直到 Machine IR 路径通过 smoke。
+7. 删除历史栈式后端实现，避免长期维护两套 RISC-V lowering。
 
 第二阶段：寄存器分配。
 
@@ -284,7 +281,7 @@ SW   %v3, frame[8]
 | Limitation | Reason | Future direction |
 | --- | --- | --- |
 | Machine IR 仍是 stack-backed MVP | 第一阶段优先保持 `-riscv` 正确性和后端边界清晰 | A13 后续阶段逐步让 virtual register 成为主要值载体 |
-| 没有全局寄存器分配 | 当前所有长期值仍以栈槽为真值来源 | A13 后续阶段再做 liveness + linear scan，并保留栈式 fallback |
+| 没有全局寄存器分配 | 当前所有长期值仍以栈槽为真值来源 | A13 后续阶段再做 liveness + linear scan，并保留 stack-backed Machine IR 兜底路径 |
 | 没有独立 instruction scheduling | 当前按 IR 顺序线性输出，方便调试 | A13 后续阶段在 Machine IR 上补 peephole、block placement 和局部调度 |
 | RV32 数据布局写死 | 当前 baremetal 工具链使用 `rv32im/ilp32` | 后续由 `DataLayout` 扩展为 target/subtarget 参数 |
 | 后端错误以 exception 抛出 | 当前 driver 仍未统一 diagnostics | 后续和 driver diagnostics / IR verifier 对接 |

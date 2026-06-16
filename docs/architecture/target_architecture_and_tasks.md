@@ -240,7 +240,8 @@ A5.6 建议推进顺序：
 - `FrameLayout`: 栈帧大小、对象槽、值槽、参数槽。
 - `CallingConvention`: 参数寄存器、栈上传参、返回值规则。
 - `AsmWriter`: 低层汇编文本输出。
-- `InstructionEmitter`: 单条 IR 指令到汇编。
+- `InstructionSelector`: Rewind IR 到 Machine IR 的指令选择和平铺映射。
+- `MachineAsmPrinter`: Machine IR 到 `AsmWriter` 调用。
 - `RiscvBackend`: module/function/basic block 遍历和总体调度。
 - `DataLayout`: 类型大小和对齐。
 

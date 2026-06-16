@@ -17,8 +17,7 @@ namespace rewind_ir
 namespace
 {
 
-struct AllocaInfo
-{
+struct AllocaInfo {
     IRAllocInst* alloc = nullptr;
     std::vector<IRLoadInst*> loads;
     std::vector<IRStoreInst*> stores;
@@ -27,8 +26,7 @@ struct AllocaInfo
     std::unordered_map<const IRBasicBlock*, IRBlockArgRef*> block_params;
 };
 
-struct PromotionState
-{
+struct PromotionState {
     IRFunction& function;
     const DominanceAnalysis& dominance;
     const std::vector<AllocaInfo*>& allocas;
@@ -190,7 +188,7 @@ void place_block_arguments(AllocaInfo& info, const DominanceAnalysis& dominance)
 
     std::vector<const IRBasicBlock*> worklist(info.def_blocks.begin(), info.def_blocks.end());
     std::unordered_set<const IRBasicBlock*> in_worklist(info.def_blocks.begin(),
-                                                       info.def_blocks.end());
+                                                        info.def_blocks.end());
 
     while (!worklist.empty()) {
         const auto* block = worklist.back();
@@ -201,6 +199,10 @@ void place_block_arguments(AllocaInfo& info, const DominanceAnalysis& dominance)
                 continue;
             }
 
+            // 插入了 block argument 之后，这个 block 本身也相当于“定义了一个新的 SSA 值”。
+            // 例如: %merge(%a_phi: i32)
+            // 这里 %a_phi 就是 @a 在 %merge 入口处的新定义。
+            // 那么它也可能继续流向更外层的汇合点，所以需要继续看 DF(merge)
             if (info.def_blocks.find(frontier_block) == info.def_blocks.end()
                 && in_worklist.insert(frontier_block).second) {
                 worklist.push_back(frontier_block);
@@ -368,12 +370,14 @@ void rename_block(PromotionState& state,
             continue;
         }
 
+        // delete promotable alloc
         const auto info_iter = state.info_by_alloc.find(inst);
         if (info_iter != state.info_by_alloc.end()) {
             ir_rewrite::erase_instruction(block, *inst);
             continue;
         }
 
+        // 将 load 替换为 replacement
         if (inst->kind_ == IRValueKind::IR_LOAD) {
             auto* load = inst->as<IRLoadInst>();
             const auto load_info_iter = state.info_by_alloc.find(load->src_);
@@ -385,6 +389,8 @@ void rename_block(PromotionState& state,
             }
         }
 
+        // 替换 alloc变量的current_value
+        // 删除 store 指令
         if (inst->kind_ == IRValueKind::IR_STORE) {
             auto* store = inst->as<IRStoreInst>();
             const auto store_info_iter = state.info_by_alloc.find(store->dest_);
@@ -437,12 +443,14 @@ bool Mem2RegPass::run_function(IRModule& module, IRFunction& function)
     DominanceAnalysis dominance(cfg);
 
     std::unordered_map<const IRValue*, AllocaInfo*> info_by_alloc;
+    // collect the local scalar alloc
     auto infos = collect_alloca_infos(function, cfg, info_by_alloc);
     if (infos.empty()) {
         return false;
     }
 
     std::unordered_set<const IRValue*> invalid_allocs;
+    //  collect alloc info and invalid_allocs
     collect_direct_uses(function, cfg, info_by_alloc, invalid_allocs);
 
     std::vector<AllocaInfo*> promotable_allocas;
@@ -452,10 +460,12 @@ bool Mem2RegPass::run_function(IRModule& module, IRFunction& function)
         }
 
         place_block_arguments(*info, dominance);
+        // prevent read undef variable
         if (!can_promote_without_undef(*info, cfg, dominance)) {
             continue;
         }
 
+        // Alloc that can finally be promoted
         promotable_allocas.push_back(info.get());
     }
 
